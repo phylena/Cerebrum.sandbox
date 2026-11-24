@@ -22,6 +22,15 @@ CREATE TABLE IF NOT EXISTS profiles (name TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS api_keys (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, owner TEXT, hash TEXT UNIQUE NOT NULL,
   created_at REAL NOT NULL, expires_at REAL, revoked_at REAL);
+CREATE TABLE IF NOT EXISTS credentials (
+  id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, secret TEXT NOT NULL,
+  hosts TEXT NOT NULL, scopes TEXT NOT NULL, max_ttl_s INTEGER NOT NULL, created_at REAL NOT NULL, revoked_at REAL);
+CREATE TABLE IF NOT EXISTS leases (
+  id TEXT PRIMARY KEY, credential_id TEXT NOT NULL, sandbox_id TEXT NOT NULL, scope TEXT NOT NULL,
+  created_at REAL NOT NULL, expires_at REAL NOT NULL, revoked_at REAL, uses INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS git_repos (
+  sandbox_id TEXT NOT NULL, path TEXT NOT NULL, url TEXT NOT NULL, branch TEXT, base_sha TEXT NOT NULL,
+  created_at REAL NOT NULL, PRIMARY KEY (sandbox_id, path));
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
   target TEXT, outcome TEXT NOT NULL, detail TEXT);

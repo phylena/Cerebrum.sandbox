@@ -56,6 +56,16 @@ class Settings:
     max_workers: int = field(default_factory=lambda: _int("SANDBOX_MAX_WORKERS", 16))
     worker_timeout_s: int = field(default_factory=lambda: _int("SANDBOX_WORKER_TIMEOUT_S", 30))
 
+    # Credential broker: Fernet key (python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())").
+    # Empty = the broker is disabled (no credential can be stored).
+    secret_key: str = field(default_factory=lambda: _env("SANDBOX_SECRET_KEY"))
+    github_api_url: str = field(default_factory=lambda: _env("SANDBOX_GITHUB_API_URL", "https://api.github.com"))
+    # Git: clone only https URLs on these hosts (and, if set, only these owner/ or owner/repo prefixes)
+    git_allowed_hosts: list[str] = field(default_factory=lambda: _list("SANDBOX_GIT_ALLOWED_HOSTS", "github.com"))
+    git_allowed_repos: list[str] = field(default_factory=lambda: _list("SANDBOX_GIT_ALLOWED_REPOS"))
+    git_max_bytes: int = field(default_factory=lambda: _int("SANDBOX_GIT_MAX_BYTES", 500 * 2**20))
+    git_timeout_s: int = field(default_factory=lambda: _int("SANDBOX_GIT_TIMEOUT_S", 300))
+
     # Hard ceilings: profiles and requests are clamped/refused above these.
     max_sandboxes: int = field(default_factory=lambda: _int("SANDBOX_MAX_SANDBOXES", 8))
     max_total_cpu: float = field(default_factory=lambda: _float("SANDBOX_MAX_TOTAL_CPU", 3.0))

@@ -212,3 +212,37 @@ def test_files_and_quota_via_api_real_docker(tmp_path):
         assert c.app.state.controller.enforce_quotas() == [sid]  # caught, stopped, data kept
     finally:
         c.delete(f"/api/v1/sandboxes/{sid}", headers=H)
+
+
+def test_git_workflow_in_networkless_sandbox(tmp_path):
+    """Clone host-side, work inside a sandbox WITHOUT network, return a patch. Nothing is pushed."""
+    from test_git_broker import fake_fetcher, local_repo
+    st = Settings(data_dir=tmp_path / "d", operator_key="op", viewer_key="vw", admin_key="adm")
+    c = TestClient(create_app(st))
+    H = {"Authorization": "Bearer op"}
+    c.app.state.controller.git_fetcher = fake_fetcher(local_repo(tmp_path), [])
+    sid = c.post("/api/v1/sandboxes", json={"profile": "basic"}, headers=H).json()["id"]
+    base = f"/api/v1/sandboxes/{sid}"
+    try:
+        assert c.post(f"{base}/git/clone", json={"url": "https://github.com/acme/widget"}, headers=H).status_code == 201
+        assert c.post(f"{base}/git/clone", json={"url": "https://github.com/acme/widget"}, headers=H).status_code == 409
+        assert c.post(f"{base}/git/branch", json={"name": "cerebrum/improve"}, headers=H).json()["branch"] == "cerebrum/improve"
+        c.post(f"{base}/files/upload?path=widget/app.py", content=b"print(2)\n", headers=H)
+        c.post(f"{base}/files/upload?path=widget/new.txt", content=b"new\n", headers=H)
+        st_ = c.get(f"{base}/git/status", headers=H).json()
+        assert not st_["clean"] and {f["path"] for f in st_["files"]} == {"app.py", "new.txt"}
+        assert "+print(2)" in c.get(f"{base}/git/diff", headers=H).json()["diff"]
+        test = c.post(f"{base}/execute", headers=H, json={"argv": ["python3", "app.py"], "workdir": "widget"}).json()
+        assert test["stdout"] == "2\n"                                           # "run the tests"
+        sha = c.post(f"{base}/git/commit", json={"message": "Improve app"}, headers=H).json()["sha"]
+        assert c.post(f"{base}/git/commit", json={"message": "again"}, headers=H).status_code == 409
+        log = c.get(f"{base}/git/log", headers=H).json()
+        assert log[0]["sha"] == sha and log[0]["author"] == "Cerebrum"
+        rep = c.get(f"{base}/git/report", headers=H).json()
+        assert len(rep["commits"]) == 1 and "Subject: [PATCH] Improve app" in rep["patch"] and "new.txt" in rep["diffstat"]
+        assert c.post(f"{base}/git/branch", json={"name": "--force"}, headers=H).status_code == 422
+        assert c.post(f"{base}/git/checkout", json={"ref": "main"}, headers=H).json()["branch"] == "main"
+        net = c.post(f"{base}/execute", headers=H, json={"argv": ["sh", "-c", "ls /sys/class/net"]}).json()
+        assert net["stdout"].split() == ["lo"]                                   # the sandbox never had network
+    finally:
+        c.delete(base, headers=H)

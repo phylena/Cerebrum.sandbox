@@ -51,6 +51,46 @@ class CreateKey(BaseModel):
     ttl_s: int | None = Field(None, ge=60, le=365 * 86400)
 
 
+class GitClone(BaseModel):
+    url: str
+    branch: str | None = None
+    depth: int = Field(1, ge=1, le=1000)
+    dest: str | None = None
+    credential_lease: str | None = Field(None, description="lease id from POST /sandboxes/{id}/leases")
+
+
+class GitBranch(BaseModel):
+    name: str
+    start: str | None = None
+    repo: str | None = None
+
+
+class GitCheckout(BaseModel):
+    ref: str
+    repo: str | None = None
+
+
+class GitCommit(BaseModel):
+    message: str = Field(min_length=1, max_length=10000)
+    all: bool = True
+    repo: str | None = None
+
+
+class AddCredential(BaseModel):
+    name: str
+    kind: str = Field(description="token | github_app")
+    secret: str = Field(min_length=8, description="write-only; never returned")
+    hosts: list[str] = Field(default_factory=lambda: ["github.com"])
+    scopes: list[str] = Field(default_factory=lambda: ["git:clone"])
+    max_ttl_s: int = 3600
+
+
+class LeaseRequest(BaseModel):
+    credential_id: str
+    scope: str = "git:clone"
+    ttl_s: int = Field(600, ge=30, le=86400)
+
+
 def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
                runtimes: dict[str, Runtime] | None = None, http_factory=None, gpu_detector=None) -> FastAPI:
     st = st or settings_mod.load()
@@ -63,6 +103,12 @@ def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
     app = FastAPI(title="Cerebrum.sandbox", version=__version__,
                   description="Isolated execution infrastructure controlled by Cerebrum.")
     app.state.controller, app.state.store, app.state.settings = ctl, store, st
+
+    from ..broker import BrokerError
+
+    @app.exception_handler(BrokerError)
+    async def _berr(_req, e: BrokerError):
+        return JSONResponse({"detail": e.message}, status_code=e.status)
 
     @app.exception_handler(ControllerError)
     async def _err(_req, e: ControllerError):
@@ -177,6 +223,88 @@ def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
     def workspace(sid: str, p: Principal = viewer):
         own(sid, p)
         return ctl.workspace_info(sid)
+
+    # ---- git ----------------------------------------------------------------------
+    @app.post("/api/v1/sandboxes/{sid}/git/clone", status_code=201)
+    def git_clone(sid: str, body: GitClone, p: Principal = operator):
+        own(sid, p)
+        return ctl.git_clone(sid, p.name, body.url, branch=body.branch, depth=body.depth, dest=body.dest,
+                             lease=body.credential_lease)
+
+    @app.post("/api/v1/sandboxes/{sid}/git/branch")
+    def git_branch(sid: str, body: GitBranch, p: Principal = operator):
+        own(sid, p)
+        return ctl.git(sid, p.name, "create_branch", body.repo, name=body.name, start=body.start)
+
+    @app.post("/api/v1/sandboxes/{sid}/git/checkout")
+    def git_checkout(sid: str, body: GitCheckout, p: Principal = operator):
+        own(sid, p)
+        return ctl.git(sid, p.name, "checkout", body.repo, ref=body.ref)
+
+    @app.get("/api/v1/sandboxes/{sid}/git/status")
+    def git_status(sid: str, repo: str | None = None, p: Principal = viewer):
+        own(sid, p)
+        return ctl.git(sid, p.name, "status", repo)
+
+    @app.get("/api/v1/sandboxes/{sid}/git/branches")
+    def git_branches(sid: str, repo: str | None = None, p: Principal = viewer):
+        own(sid, p)
+        return ctl.git(sid, p.name, "branches", repo)
+
+    @app.get("/api/v1/sandboxes/{sid}/git/diff")
+    def git_diff(sid: str, repo: str | None = None, staged: bool = False, base: str | None = None,
+                 stat: bool = False, p: Principal = viewer):
+        own(sid, p)
+        return {"diff": ctl.git(sid, p.name, "diff", repo, staged=staged, base=base, stat=stat)}
+
+    @app.post("/api/v1/sandboxes/{sid}/git/commit")
+    def git_commit(sid: str, body: GitCommit, p: Principal = operator):
+        own(sid, p)
+        return ctl.git(sid, p.name, "commit", body.repo, message=body.message, add_all=body.all)
+
+    @app.get("/api/v1/sandboxes/{sid}/git/log")
+    def git_log(sid: str, repo: str | None = None, n: int = Query(20, ge=1, le=500), p: Principal = viewer):
+        own(sid, p)
+        return ctl.git(sid, p.name, "log", repo, n=n)
+
+    @app.get("/api/v1/sandboxes/{sid}/git/report")
+    def git_report(sid: str, repo: str | None = None, p: Principal = viewer):
+        own(sid, p)
+        return ctl.git_report(sid, p.name, repo)
+
+    # ---- credential broker ------------------------------------------------------------
+    @app.post("/api/v1/credentials", status_code=201)
+    def add_credential(body: AddCredential, p: Principal = admin):
+        return ctl.broker.add(body.name, body.kind, body.secret, body.hosts, body.scopes, body.max_ttl_s, p.name)
+
+    @app.get("/api/v1/credentials")
+    def list_credentials(_p: Principal = admin):
+        return ctl.broker.list_credentials()
+
+    @app.delete("/api/v1/credentials/{cid}")
+    def revoke_credential(cid: str, p: Principal = admin):
+        ctl.broker.revoke(cid, p.name)
+        return {"ok": True}
+
+    @app.post("/api/v1/sandboxes/{sid}/leases", status_code=201)
+    def create_lease(sid: str, body: LeaseRequest, p: Principal = operator):
+        s = own(sid, p)
+        if s["state"] in ("terminated", "failed"):
+            raise HTTPException(409, "sandbox is not active")
+        return ctl.broker.lease(body.credential_id, sid, body.scope, body.ttl_s, p.name)
+
+    @app.get("/api/v1/sandboxes/{sid}/leases")
+    def list_leases(sid: str, p: Principal = viewer):
+        own(sid, p)
+        return ctl.broker.leases(sid)
+
+    @app.delete("/api/v1/sandboxes/{sid}/leases/{lid}")
+    def revoke_lease(sid: str, lid: str, p: Principal = operator):
+        own(sid, p)
+        if not any(l["id"] == lid for l in ctl.broker.leases(sid)):
+            raise HTTPException(404, "lease not found")
+        ctl.broker.revoke_lease(lid, p.name)
+        return {"ok": True}
 
     # ---- platform -----------------------------------------------------------------
     @app.get("/api/v1/runtimes")

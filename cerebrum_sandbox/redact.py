@@ -11,9 +11,20 @@ _PATTERNS = [
 ]
 
 
+_KNOWN: set[str] = set()  # exact secret values the broker handed out: always scrubbed
+
+
+def register_secret(value: str) -> None:
+    if value and len(value) >= 8:
+        _KNOWN.add(value)
+
+
 def redact(text: str) -> str:
     if not text:
         return text
+    for v in _KNOWN:
+        if v in text:
+            text = text.replace(v, "[REDACTED]")
     for rx in _PATTERNS:
         if rx.groups == 0:
             text = rx.sub("[REDACTED]", text)

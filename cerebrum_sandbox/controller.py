@@ -11,7 +11,7 @@ from .profiles import BUILTIN, RANK, RUNTIME_FOR, Isolation, Profile, clamp_chec
 from .redact import redact
 from .resources import detect_gpus
 from .runtime import Runtime, RuntimeError_, SandboxSpec
-from .runtime.base import safe_workdir
+from .runtime.base import safe_path, safe_workdir
 from .runtime.remote import RemoteRuntime, validate_worker_url
 from .scheduler import Capacity, PlacementError, place
 from .settings import Settings
@@ -34,6 +34,9 @@ class Controller:
         self.runtimes: dict[str, Runtime] = runtimes if isinstance(runtimes, dict) else {"docker": runtimes}
         self._http_factory = http_factory or self._default_http
         self._gpu_detector = gpu_detector or detect_gpus
+        from .broker import Broker
+        self.broker = Broker(st, store)
+        self.git_fetcher = None  # tests may replace host-side cloning; default: git_ops.host_clone
         self._locks: dict[str, threading.Lock] = {}
         self._guard = threading.Lock()  # serialises quota check + insert
         self.recover()
@@ -312,6 +315,7 @@ class Controller:
                 self.store.audit(actor, "sandbox.destroy", sid, "failed", {"error": str(e)})
                 raise ControllerError(502, str(e)) from e
             self._set(sid, State.TERMINATED)
+        self.broker.revoke_for_sandbox(sid)
         self.store.audit(actor, "sandbox.destroy", sid, "ok")
         return self.get(sid)
 
@@ -435,6 +439,76 @@ class Controller:
                 except ControllerError:
                     pass
         return stopped
+
+    # ---- git --------------------------------------------------------------------------
+    def _repo(self, sid: str, repo: str | None) -> str:
+        if repo:
+            return safe_path(repo)
+        rows = self.store.q("SELECT path FROM git_repos WHERE sandbox_id=?", (sid,))
+        if len(rows) != 1:
+            raise ControllerError(422, "specify 'repo' (the sandbox has " + str(len(rows)) + " cloned repositories)")
+        return rows[0]["path"]
+
+    def _git(self, sid: str):
+        from .git_ops import SandboxGit
+        _, rt = self._running(sid)
+        return SandboxGit(rt, sid, timeout_s=min(self.st.max_exec_seconds, 300))
+
+    def git(self, sid: str, actor: str, op: str, repo: str | None = None, **kw):
+        from .broker import BrokerError
+        from .git_ops import GitError
+        g = self._git(sid)
+        path = self._repo(sid, repo)
+        try:
+            out = getattr(g, op)(path, **kw)
+        except (GitError, BrokerError) as e:
+            self.store.audit(actor, f"git.{op}", sid, "failed", {"repo": path, "error": e.message})
+            raise ControllerError(e.status, e.message) from e
+        except RuntimeError_ as e:
+            raise ControllerError(502, str(e)) from e
+        if op in ("create_branch", "checkout", "commit"):
+            self.store.audit(actor, f"git.{op}", sid, "ok", {"repo": path, **{k: v for k, v in kw.items()
+                                                                              if k != "message"}})
+        return out
+
+    def git_clone(self, sid: str, actor: str, url: str, *, branch: str | None = None, depth: int = 1,
+                  dest: str | None = None, lease: str | None = None) -> dict:
+        from .broker import BrokerError
+        from .git_ops import GitError, host_clone, parse_repo_url
+        g = self._git(sid)
+        try:
+            norm, host, repo = parse_repo_url(url, self.st.git_allowed_hosts, self.st.git_allowed_repos)
+            path = safe_path(dest or repo.split("/", 1)[1])
+            header = self.broker.resolve_git_header(lease, sid, host, repo, actor) if lease else None
+            fetch = self.git_fetcher or host_clone
+            tar, head = fetch(norm, branch, depth, header, workdir=self.st.data_dir / "tmp",
+                              max_bytes=self.st.git_max_bytes, timeout_s=self.st.git_timeout_s)
+            g.extract(tar, path)
+        except (GitError, BrokerError) as e:
+            self.store.audit(actor, "git.clone", sid, "failed", {"url": url, "error": e.message})
+            raise ControllerError(e.status, e.message) from e
+        except RuntimeError_ as e:
+            raise ControllerError(422 if "inside /workspace" in str(e) else 502, str(e)) from e
+        self.store.x("INSERT OR REPLACE INTO git_repos VALUES (?,?,?,?,?,?)",
+                     (sid, path, norm, branch, head, time.time()))
+        self.store.audit(actor, "git.clone", sid, "ok", {"url": norm, "path": path, "head": head,
+                                                       "credential": bool(lease)})
+        return {"path": path, "url": norm, "branch": branch, "head": head}
+
+    def git_report(self, sid: str, actor: str, repo: str | None = None) -> dict:
+        path = self._repo(sid, repo)
+        rows = self.store.q("SELECT * FROM git_repos WHERE sandbox_id=? AND path=?", (sid, path))
+        if not rows:
+            raise ControllerError(404, "repository was not cloned through the API (no base recorded)")
+        base = rows[0]["base_sha"]
+        rep = {"url": rows[0]["url"], "path": path, "base": base,
+               "status": self.git(sid, actor, "status", path),
+               "commits": self.git(sid, actor, "log", path, n=500, base=base),
+               "diffstat": self.git(sid, actor, "diff", path, base=base, stat=True),
+               "patch": self.git(sid, actor, "patch", path, base=base),
+               "uncommitted_diff": self.git(sid, actor, "diff", path)}
+        self.store.audit(actor, "git.report", sid, "ok", {"repo": path, "commits": len(rep["commits"])})
+        return rep
 
     def executions(self, sid: str, limit: int = 50) -> list[dict]:
         self.get(sid)
