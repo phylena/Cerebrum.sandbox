@@ -74,6 +74,16 @@ class Settings:
     git_max_bytes: int = field(default_factory=lambda: _int("SANDBOX_GIT_MAX_BYTES", 500 * 2**20))
     git_timeout_s: int = field(default_factory=lambda: _int("SANDBOX_GIT_TIMEOUT_S", 300))
 
+    # Jobs (one-shot sandboxes run by the scheduler)
+    max_concurrent_jobs: int = field(default_factory=lambda: _int("SANDBOX_MAX_CONCURRENT_JOBS", 2))
+    max_queued_jobs: int = field(default_factory=lambda: _int("SANDBOX_MAX_QUEUED_JOBS", 200))
+    job_hours_budget_daily: float = field(default_factory=lambda: _float("SANDBOX_JOB_HOURS_BUDGET_DAILY", 24.0))
+    job_retry_backoff_s: int = field(default_factory=lambda: _int("SANDBOX_JOB_RETRY_BACKOFF_S", 10))
+    # Maintenance loop and alerting
+    maintenance_interval_s: int = field(default_factory=lambda: _int("SANDBOX_MAINTENANCE_INTERVAL_S", 60))
+    backup_keep: int = field(default_factory=lambda: _int("SANDBOX_BACKUP_KEEP", 14))
+    alert_webhook: str = field(default_factory=lambda: _env("SANDBOX_ALERT_WEBHOOK"))
+
     # Hard ceilings: profiles and requests are clamped/refused above these.
     max_sandboxes: int = field(default_factory=lambda: _int("SANDBOX_MAX_SANDBOXES", 8))
     max_total_cpu: float = field(default_factory=lambda: _float("SANDBOX_MAX_TOTAL_CPU", 3.0))

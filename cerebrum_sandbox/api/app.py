@@ -5,12 +5,14 @@ import time
 import uuid
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 from .. import __version__, settings as settings_mod
 from ..auth import Principal, hash_key, new_key, require
 from ..controller import Controller, ControllerError
+from ..jobs import JobRunner, JobSpec
+from ..monitor import Events, Maintenance, prometheus
 from ..profiles import Profile
 from ..resources import host_resources
 from ..runtime import Runtime
@@ -105,6 +107,9 @@ def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
     runtimes = runtimes or ({"docker": runtime} if runtime else build_runtimes(st))
     ctl = Controller(st, store, runtimes, http_factory=http_factory, gpu_detector=gpu_detector)
     ctl.egress = egress
+    ctl.events = Events(store, st.alert_webhook)
+    jobs = JobRunner(ctl, st, store)
+    maintenance = Maintenance(ctl, st, store, ctl.events)
     if egress:
         ctl.recover()  # re-register policies of sandboxes that survived a restart
     keys = lambda: {"admin": st.admin_key, "operator": st.operator_key, "viewer": st.viewer_key}  # noqa: E731
@@ -113,6 +118,20 @@ def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
     app = FastAPI(title="Cerebrum.sandbox", version=__version__,
                   description="Isolated execution infrastructure controlled by Cerebrum.")
     app.state.controller, app.state.store, app.state.settings = ctl, store, st
+    app.state.jobs, app.state.maintenance, app.state.egress = jobs, maintenance, egress
+
+    import json as _json
+    import logging as _logging
+    access = _logging.getLogger("cerebrum_sandbox.access")
+
+    @app.middleware("http")
+    async def _access_log(request: Request, call_next):  # structured, secret-free (no headers, no bodies)
+        t0 = time.monotonic()
+        response = await call_next(request)
+        access.info(_json.dumps({"ts": round(time.time(), 3), "method": request.method, "path": request.url.path,
+                                 "status": response.status_code, "ms": round((time.monotonic() - t0) * 1000, 1),
+                                 "client": request.client.host if request.client else None}))
+        return response
 
     from ..broker import BrokerError
 
@@ -326,6 +345,48 @@ def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
             raise HTTPException(404, "lease not found")
         ctl.broker.revoke_lease(lid, p.name)
         return {"ok": True}
+
+    @app.get("/api/v1/sandboxes/{sid}/metrics")
+    def sandbox_metrics(sid: str, p: Principal = viewer):
+        own(sid, p)
+        return ctl.metrics(sid)
+
+    # ---- jobs ------------------------------------------------------------------------
+    def own_job(jid: str, p: Principal) -> dict:
+        j = jobs.get(jid)
+        if not p.may_see(j["owner"]):
+            raise HTTPException(404, "Job not found")
+        return j
+
+    @app.post("/api/v1/jobs", status_code=201)
+    def submit_job(body: JobSpec, p: Principal = operator):
+        return jobs.submit(body, p.name, p.owner or p.name)
+
+    @app.get("/api/v1/jobs")
+    def list_jobs(state: str | None = None, limit: int = Query(100, ge=1, le=1000), p: Principal = viewer):
+        return [j for j in jobs.list_jobs(state, limit) if p.may_see(j["owner"])]
+
+    @app.get("/api/v1/jobs/{jid}")
+    def get_job(jid: str, p: Principal = viewer):
+        return own_job(jid, p)
+
+    @app.delete("/api/v1/jobs/{jid}")
+    def cancel_job(jid: str, p: Principal = operator):
+        own_job(jid, p)
+        return jobs.cancel(jid, p.name)
+
+    # ---- monitoring ----------------------------------------------------------------------
+    @app.get("/api/v1/events")
+    def events(limit: int = Query(100, ge=1, le=1000), severity: str | None = None, _p: Principal = viewer):
+        return ctl.events.list(limit, severity)
+
+    @app.post("/api/v1/maintenance/run")
+    def run_maintenance(_p: Principal = admin):
+        return maintenance.run_once()
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    def metrics(_p: Principal = viewer):
+        return prometheus(ctl, store, jobs, egress)
 
     # ---- platform -----------------------------------------------------------------
     @app.get("/api/v1/runtimes")

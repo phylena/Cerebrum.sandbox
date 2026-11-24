@@ -35,6 +35,16 @@ CREATE TABLE IF NOT EXISTS netlog (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, sandbox_id TEXT, src TEXT, method TEXT, host TEXT,
   port INTEGER, decision TEXT NOT NULL, reason TEXT, bytes_up INTEGER, bytes_down INTEGER, duration_s REAL);
 CREATE INDEX IF NOT EXISTS netlog_sb ON netlog(sandbox_id, ts);
+CREATE TABLE IF NOT EXISTS jobs (
+  id TEXT PRIMARY KEY, owner TEXT NOT NULL, actor TEXT NOT NULL, spec TEXT NOT NULL, priority INTEGER NOT NULL,
+  state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, max_retries INTEGER NOT NULL, sandbox_id TEXT,
+  result TEXT, error TEXT, wait_reason TEXT, created_at REAL NOT NULL, started_at REAL, finished_at REAL,
+  cancel_requested INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS jobs_q ON jobs(state, priority, created_at);
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, kind TEXT NOT NULL, severity TEXT NOT NULL,
+  target TEXT, message TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 1, last_ts REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS events_kind ON events(kind, target, last_ts);
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
   target TEXT, outcome TEXT NOT NULL, detail TEXT);

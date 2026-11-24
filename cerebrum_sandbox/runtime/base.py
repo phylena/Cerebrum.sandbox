@@ -110,6 +110,10 @@ class Runtime(ABC):
             raise RuntimeError_(f"usage failed: {r.stderr.strip()[:200]}")
         return int(r.stdout.strip() or 0) * 1024
 
+    def stats(self, sid: str) -> dict | None:
+        """Live resource usage (None if the runtime cannot report it)."""
+        return None
+
     def address(self, sid: str, network: str) -> str | None:
         """IP of the sandbox on a named network (None if not applicable)."""
         return None

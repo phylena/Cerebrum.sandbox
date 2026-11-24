@@ -309,3 +309,25 @@ def test_allowlist_network_enforced_live(tmp_path):
         c.delete(f"/api/v1/sandboxes/{sid}", headers=H)
         proxy.stop()
         subprocess.run(["docker", "network", "rm", st.egress_network_name], capture_output=True)
+
+
+def test_job_and_live_metrics_real_docker(tmp_path):
+    import base64
+    st = Settings(data_dir=tmp_path, operator_key="op", viewer_key="vw", admin_key="adm")
+    c = TestClient(create_app(st))
+    H = {"Authorization": "Bearer op"}
+    script = b"import json,sys\nopen('out.json','w').write(json.dumps({'sum': sum(range(10))}))\nprint('done')\n"
+    jid = c.post("/api/v1/jobs", headers=H, json={"argv": ["python3", "job.py"], "files": {
+        "job.py": base64.b64encode(script).decode()}, "outputs": ["out.json"]}).json()["id"]
+    assert c.app.state.jobs.run_once()
+    j = c.get(f"/api/v1/jobs/{jid}", headers=H).json()
+    assert j["state"] == "succeeded" and j["result"]["stdout"] == "done\n"
+    assert base64.b64decode(j["result"]["outputs"]["out.json"]) == b'{"sum": 45}'
+    assert subprocess.run(["docker", "ps", "-aq", "--filter", "label=cerebrum.sandbox=1"], capture_output=True,
+                          text=True).stdout.strip() == ""                    # job sandbox removed
+    sid = c.post("/api/v1/sandboxes", json={"profile": "basic"}, headers=H).json()["id"]
+    try:
+        m = c.get(f"/api/v1/sandboxes/{sid}/metrics", headers=H).json()
+        assert m["live"]["pids"] is not None and "MiB" in m["live"]["memory"] and m["workspace_used_bytes"] == 0
+    finally:
+        c.delete(f"/api/v1/sandboxes/{sid}", headers=H)

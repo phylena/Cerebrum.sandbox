@@ -36,6 +36,7 @@ class Controller:
         self._gpu_detector = gpu_detector or detect_gpus
         from .broker import Broker
         self.broker = Broker(st, store)
+        self.events = None  # monitor.Events (set by the app)
         self.egress = None  # EgressProxy when SANDBOX_EGRESS_ENABLED (set by the app)
         self.git_fetcher = None  # tests may replace host-side cloning; default: git_ops.host_clone
         self._locks: dict[str, threading.Lock] = {}
@@ -544,6 +545,22 @@ class Controller:
                "uncommitted_diff": self.git(sid, actor, "diff", path)}
         self.store.audit(actor, "git.report", sid, "ok", {"repo": path, "commits": len(rep["commits"])})
         return rep
+
+    def metrics(self, sid: str) -> dict:
+        s = self.get(sid)
+        ex = {r["status"]: r["n"] for r in self.store.q(
+            "SELECT status, COUNT(*) n FROM executions WHERE sandbox_id=? GROUP BY status", (sid,))}
+        out = {"id": sid, "state": s["state"], "limits": {k: s["profile_snapshot"][k] for k in
+                                                           ("cpu", "memory_mb", "pids", "workspace_mb", "gpus")},
+               "gpu_indices": s["gpu_indices"], "executions": ex, "live": None, "workspace_used_bytes": None}
+        if s["state"] == State.RUNNING:
+            rt = self._rt(s)
+            try:
+                out["live"] = rt.stats(sid)
+                out["workspace_used_bytes"] = rt.workspace_usage_bytes(sid)
+            except RuntimeError_:
+                pass
+        return out
 
     def executions(self, sid: str, limit: int = 50) -> list[dict]:
         self.get(sid)

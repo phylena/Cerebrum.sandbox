@@ -140,6 +140,16 @@ class DockerRuntime(Runtime):
             return "missing"
         return {"running": "running", "paused": "paused"}.get(out.strip(), "stopped")
 
+    def stats(self, sandbox_id: str) -> dict | None:
+        rc, out, _ = self._runner([self.st.docker_bin, "stats", "--no-stream", "--format", "{{json .}}",
+                                   container_name(sandbox_id)], 30)
+        if rc != 0 or not out.strip():
+            return None
+        import json as _json
+        d = _json.loads(out.strip().splitlines()[0])
+        return {"cpu_percent": d.get("CPUPerc"), "memory": d.get("MemUsage"), "memory_percent": d.get("MemPerc"),
+                "pids": d.get("PIDs"), "net_io": d.get("NetIO"), "block_io": d.get("BlockIO")}
+
     def address(self, sandbox_id: str, network: str) -> str | None:
         rc, out, _ = self._runner([self.st.docker_bin, "inspect", "-f", "{{json .NetworkSettings.Networks}}",
                                    container_name(sandbox_id)], 30)
