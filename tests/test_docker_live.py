@@ -188,3 +188,27 @@ def test_api_end_to_end_real_docker(tmp_path):
         assert c.get("/health").json()["runtime"]["ok"] is True
     finally:
         assert c.delete(f"/api/v1/sandboxes/{sid}", headers=H).json()["state"] == "terminated"
+
+
+def test_files_and_quota_via_api_real_docker(tmp_path):
+    st = Settings(data_dir=tmp_path, operator_key="op", viewer_key="vw", admin_key="adm")
+    c = TestClient(create_app(st))
+    H, A = {"Authorization": "Bearer op"}, {"Authorization": "Bearer adm"}
+    c.post("/api/v1/profiles", json={"name": "pers", "persistent_workspace": True, "workspace_mb": 16}, headers=A)
+    sid = c.post("/api/v1/sandboxes", json={"profile": "pers"}, headers=H).json()["id"]
+    try:
+        payload = bytes(range(256)) * 4096  # 1 MiB binary
+        assert c.post(f"/api/v1/sandboxes/{sid}/files/upload?path=d/p.bin", content=payload, headers=H).status_code == 201
+        assert c.get(f"/api/v1/sandboxes/{sid}/files/download?path=d/p.bin", headers=H).content == payload
+        r = c.post(f"/api/v1/sandboxes/{sid}/execute", headers=H,
+                   json={"argv": ["sha256sum", "d/p.bin"]}).json()
+        import hashlib
+        assert r["stdout"].split()[0] == hashlib.sha256(payload).hexdigest()
+        assert c.post(f"/api/v1/sandboxes/{sid}/files/upload?path=big", content=b"x" * (16 * 2**20),
+                      headers=H).status_code == 507
+        assert c.get(f"/api/v1/sandboxes/{sid}/workspace", headers=H).json()["used_bytes"] >= len(payload)
+        c.post(f"/api/v1/sandboxes/{sid}/execute", headers=H,
+               json={"argv": ["sh", "-c", "head -c 20000000 /dev/zero > /workspace/sneaky"]})
+        assert c.app.state.controller.enforce_quotas() == [sid]  # caught, stopped, data kept
+    finally:
+        c.delete(f"/api/v1/sandboxes/{sid}", headers=H)

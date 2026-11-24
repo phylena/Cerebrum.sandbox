@@ -317,7 +317,8 @@ class Controller:
 
     # ---- execution --------------------------------------------------------------
     def execute(self, sid: str, argv: list[str], actor: str, *, workdir: str | None = None,
-                env: dict[str, str] | None = None, timeout_s: int | None = None) -> dict:
+                env: dict[str, str] | None = None, timeout_s: int | None = None,
+                stdin: bytes | None = None) -> dict:
         s = self.get(sid)
         if s["state"] != State.RUNNING:
             raise ControllerError(409, f"Sandbox is {s['state']}; it must be running to execute")
@@ -332,7 +333,7 @@ class Controller:
         try:
             wd = safe_workdir(workdir)
             res = self._rt(s).execute(sid, argv, workdir=wd, env=env or {}, timeout_s=timeout,
-                                       max_output_bytes=self.st.max_output_bytes)
+                                       max_output_bytes=self.st.max_output_bytes, stdin=stdin)
         except RuntimeError_ as e:
             self.store.audit(actor, "sandbox.execute", sid, "failed", {"error": str(e)})
             raise ControllerError(422 if "working directory" in str(e) else 502, str(e)) from e
@@ -345,6 +346,95 @@ class Controller:
         self.store.audit(actor, "sandbox.execute", sid, status, {"execution": eid, "argv0": argv[0]})
         return {"id": eid, "status": status, "exit_code": res.exit_code, "stdout": out, "stderr": err,
                 "truncated": res.truncated, "timed_out": res.timed_out, "duration_s": res.duration_s}
+
+    # ---- files and workspace ---------------------------------------------------------
+    def _running(self, sid: str) -> tuple[dict, Runtime]:
+        s = self.get(sid)
+        if s["state"] != State.RUNNING:
+            raise ControllerError(409, f"Sandbox is {s['state']}; it must be running")
+        return s, self._rt(s)
+
+    def _op(self, actor: str, action: str, sid: str, fn, detail: dict | None = None):
+        try:
+            out = fn()
+        except RuntimeError_ as e:
+            self.store.audit(actor, action, sid, "failed", {**(detail or {}), "error": str(e)})
+            msg = str(e)
+            code = 422 if any(k in msg for k in ("inside /workspace", "path", "mode")) else \
+                404 if any(k in msg for k in ("not a regular file", "not a directory", "No such file")) else \
+                413 if "too large" in msg else 502
+            raise ControllerError(code, msg) from e
+        self.store.audit(actor, action, sid, "ok", detail)
+        return out
+
+    def _quota_bytes(self, s: dict) -> int:
+        return s["profile_snapshot"]["workspace_mb"] * 2**20
+
+    def write_file(self, sid: str, path: str, data: bytes, actor: str, *, mode: str = "644") -> dict:
+        s, rt = self._running(sid)
+        if len(data) > self.st.max_file_bytes:
+            raise ControllerError(413, f"file larger than {self.st.max_file_bytes} bytes")
+        if s["profile_snapshot"].get("persistent_workspace"):
+            # named volumes have no kernel quota: check before writing (tmpfs ones are kernel-enforced)
+            used = self._op(actor, "workspace.usage", sid, lambda: rt.workspace_usage_bytes(sid))
+            if used + len(data) > self._quota_bytes(s):
+                self.store.audit(actor, "file.write", sid, "denied", {"path": path, "reason": "quota"})
+                raise ControllerError(507, f"workspace quota exceeded ({used + len(data)} > {self._quota_bytes(s)} bytes)")
+        self._op(actor, "file.write", sid, lambda: rt.write_file(sid, path, data, mode=mode),
+                 {"path": path, "bytes": len(data)})
+        return {"path": path, "bytes": len(data)}
+
+    def read_file(self, sid: str, path: str, actor: str) -> bytes:
+        _, rt = self._running(sid)
+        return self._op(actor, "file.read", sid, lambda: rt.read_file(sid, path, max_bytes=self.st.max_file_bytes),
+                        {"path": path})
+
+    def list_dir(self, sid: str, path: str) -> list[dict]:
+        _, rt = self._running(sid)
+        try:
+            return rt.list_dir(sid, path)
+        except RuntimeError_ as e:
+            raise ControllerError(404 if "not a directory" in str(e) else
+                                  422 if "inside /workspace" in str(e) else 502, str(e)) from e
+
+    def delete_path(self, sid: str, path: str, actor: str) -> None:
+        _, rt = self._running(sid)
+        self._op(actor, "file.delete", sid, lambda: rt.delete_path(sid, path), {"path": path})
+
+    def workspace_info(self, sid: str) -> dict:
+        s, rt = self._running(sid)
+        try:
+            used = rt.workspace_usage_bytes(sid)
+        except RuntimeError_ as e:
+            raise ControllerError(502, str(e)) from e
+        return {"path": "/workspace", "used_bytes": used, "quota_bytes": self._quota_bytes(s),
+                "persistent": bool(s["profile_snapshot"].get("persistent_workspace")),
+                "enforcement": "application check + periodic scan" if s["profile_snapshot"].get(
+                    "persistent_workspace") else "kernel (size-limited tmpfs or block device)"}
+
+    def kill_processes(self, sid: str, actor: str) -> None:
+        _, rt = self._running(sid)
+        self._op(actor, "sandbox.kill_processes", sid, lambda: rt.kill_processes(sid))
+
+    def enforce_quotas(self, actor: str = "system") -> list[str]:
+        """Stop running persistent-workspace sandboxes that exceed their quota (data is kept)."""
+        stopped = []
+        for s in self.list_sandboxes("running"):
+            if not s["profile_snapshot"].get("persistent_workspace"):
+                continue
+            try:
+                used = self._rt(s).workspace_usage_bytes(s["id"])
+            except RuntimeError_:
+                continue
+            if used > self._quota_bytes(s):
+                self.store.audit(actor, "security.quota_exceeded", s["id"], "stopped",
+                                 {"used": used, "quota": self._quota_bytes(s)})
+                try:
+                    self.stop(s["id"], actor)
+                    stopped.append(s["id"])
+                except ControllerError:
+                    pass
+        return stopped
 
     def executions(self, sid: str, limit: int = 50) -> list[dict]:
         self.get(sid)

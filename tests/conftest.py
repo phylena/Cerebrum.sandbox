@@ -16,6 +16,7 @@ class FakeRuntime(Runtime):
         self.next_exec = ExecResult(0, "hi\n", "")
         self.calls: list = []
         self.specs: dict = {}
+        self.files = {}
 
     def create(self, spec):
         if self.fail_create:
@@ -31,6 +32,36 @@ class FakeRuntime(Runtime):
     def status(self, sid): return self.boxes.get(sid, "missing")
     def logs(self, sid, tail=200): return "token=abcdef123456 started"
     def health(self): return {"runtime": "fake", "ok": True}
+
+    # in-memory files (the real implementations are exercised live in test_docker_live.py)
+    files: dict = {}
+
+    def write_file(self, sid, path, data, *, mode="644"):
+        from cerebrum_sandbox.runtime.base import safe_path
+        self.files[(sid, safe_path(path))] = data
+
+    def read_file(self, sid, path, *, max_bytes):
+        from cerebrum_sandbox.runtime.base import safe_path
+        d = self.files.get((sid, safe_path(path)))
+        if d is None:
+            raise RuntimeError_("read failed: not a regular file")
+        if len(d) > max_bytes:
+            raise RuntimeError_(f"read failed: too large: {len(d)} bytes")
+        return d
+
+    def list_dir(self, sid, path, *, limit=1000):
+        return [{"name": p.rsplit("/", 1)[-1], "type": "file", "size": len(d), "mtime": 0.0}
+                for (s, p), d in self.files.items() if s == sid]
+
+    def delete_path(self, sid, path):
+        from cerebrum_sandbox.runtime.base import safe_path
+        self.files.pop((sid, safe_path(path)), None)
+
+    def workspace_usage_bytes(self, sid):
+        return sum(len(d) for (s, _), d in self.files.items() if s == sid)
+
+    def kill_processes(self, sid):
+        self.calls.append((sid, "kill"))
 
     def execute(self, sid, argv, *, workdir, env, timeout_s, max_output_bytes, stdin=None):
         self.calls.append((sid, argv, workdir, env, timeout_s))

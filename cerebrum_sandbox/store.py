@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS executions (
   exit_code INTEGER, stdout TEXT, stderr TEXT, truncated INTEGER, duration_s REAL, created_at REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS ex_sb ON executions(sandbox_id, created_at);
 CREATE TABLE IF NOT EXISTS profiles (name TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS api_keys (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, owner TEXT, hash TEXT UNIQUE NOT NULL,
+  created_at REAL NOT NULL, expires_at REAL, revoked_at REAL);
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
   target TEXT, outcome TEXT NOT NULL, detail TEXT);

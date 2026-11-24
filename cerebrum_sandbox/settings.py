@@ -63,6 +63,7 @@ class Settings:
     max_sandbox_cpu: float = field(default_factory=lambda: _float("SANDBOX_MAX_SANDBOX_CPU", 2.0))
     max_sandbox_memory_mb: int = field(default_factory=lambda: _int("SANDBOX_MAX_SANDBOX_MEMORY_MB", 4096))
     max_exec_seconds: int = field(default_factory=lambda: _int("SANDBOX_MAX_EXEC_SECONDS", 600))
+    max_file_bytes: int = field(default_factory=lambda: _int("SANDBOX_MAX_FILE_BYTES", 50 * 2**20))
     max_output_bytes: int = field(default_factory=lambda: _int("SANDBOX_MAX_OUTPUT_BYTES", 262144))
     audit_retention_days: int = field(default_factory=lambda: _int("SANDBOX_AUDIT_RETENTION_DAYS", 90))
 
