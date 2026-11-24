@@ -381,6 +381,23 @@ def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
         ctl.delete_snapshot(snap, p.name)
         return {"ok": True}
 
+    # ---- dashboard (static; the API key is entered in the browser, never embedded) -------
+    from pathlib import Path as _P
+    _dash = _P(__file__).resolve().parent.parent / "dashboard"
+    _types = {"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8",
+              "app.css": "text/css; charset=utf-8"}
+    _csp = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; "
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+
+    @app.get("/dashboard", include_in_schema=False)
+    @app.get("/dashboard/{name}", include_in_schema=False)
+    def dashboard(name: str = "index.html"):
+        if name not in _types:
+            raise HTTPException(404, "not found")
+        return Response((_dash / name).read_bytes(), media_type=_types[name],
+                        headers={"Content-Security-Policy": _csp, "X-Content-Type-Options": "nosniff",
+                                 "Referrer-Policy": "no-referrer", "Cache-Control": "no-store"})
+
     @app.get("/api/v1/whoami")
     def whoami(p: Principal = viewer):
         return {"role": p.role, "name": p.name, "owner": p.owner}

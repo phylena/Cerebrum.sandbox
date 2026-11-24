@@ -250,3 +250,15 @@ def test_audit_trail(client):
     client.post("/api/v1/sandboxes", json={"profile": "basic"}, headers=OP)
     actions = [a["action"] for a in client.get("/api/v1/audit", headers=ADM).json()]
     assert "sandbox.create" in actions
+
+
+def test_dashboard_served_with_strict_headers(client):
+    r = client.get("/dashboard")
+    assert r.status_code == 200 and "Cerebrum" in r.text
+    csp = r.headers["content-security-policy"]
+    assert "script-src 'self'" in csp and "unsafe-inline" not in csp and "frame-ancestors 'none'" in csp
+    assert client.get("/dashboard/app.js").headers["content-type"].startswith("text/javascript")
+    for bad in ("../api/app.py", "..%2F..%2Fsettings.py", "x.html", "%2e%2e%2fstore.py"):
+        assert client.get(f"/dashboard/{bad}").status_code == 404
+    js = client.get("/dashboard/app.js").text
+    assert "innerHTML" not in js.replace("never innerHTML", "")  # rendering uses textContent only
