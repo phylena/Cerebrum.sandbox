@@ -246,3 +246,66 @@ def test_git_workflow_in_networkless_sandbox(tmp_path):
         assert net["stdout"].split() == ["lo"]                                   # the sandbox never had network
     finally:
         c.delete(base, headers=H)
+
+
+def _upstream():
+    import os
+    return os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+
+
+def test_allowlist_network_enforced_live(tmp_path):
+    """Real container on the internal network; only allowlisted hosts via our proxy; direct egress impossible."""
+    import os
+    st = Settings(data_dir=tmp_path, operator_key="op", admin_key="adm", viewer_key="vw", egress_enabled=True,
+                  egress_network_name="csb-egress-test", egress_subnet="172.31.250.0/24", egress_port=0,
+                  egress_upstream_proxy=_upstream() or "")
+    # port 0 -> pick a free port, then publish the real one in the proxy URL
+    from cerebrum_sandbox.egress import EgressProxy, ensure_network
+    from cerebrum_sandbox.store import Store
+    gw = ensure_network("docker", st.egress_network_name, st.egress_subnet)
+    store = Store(tmp_path)
+    proxy = EgressProxy(store, gw, 0, upstream=st.egress_upstream_proxy or None)
+    proxy.start()
+    st.egress_network, st.egress_proxy_url = st.egress_network_name, f"http://{gw}:{proxy.port}"
+    c = TestClient(create_app(st, egress=proxy))
+    A, H = {"Authorization": "Bearer adm"}, {"Authorization": "Bearer op"}
+    c.post("/api/v1/profiles", headers=A, json={"name": "pypi-only", "network": {
+        "mode": "allowlist", "allowed_domains": ["pypi.org"], "allowed_ports": [443]}})
+    r = c.post("/api/v1/sandboxes", json={"profile": "pypi-only"}, headers=H)
+    assert r.status_code == 201, r.text
+    sid = r.json()["id"]
+    py = lambda code: c.post(f"/api/v1/sandboxes/{sid}/execute", headers=H,  # noqa: E731
+                             json={"argv": ["python3", "-c", code], "timeout_s": 40}).json()
+    try:
+        ca = "/etc/ssl/certs/ca-certificates.crt"
+        if _upstream() and os.path.exists("/root/.ccr/ca-bundle.crt"):  # this build host intercepts TLS upstream
+            c.post(f"/api/v1/sandboxes/{sid}/files/upload?path=ca.pem", headers=H,
+                   content=open("/root/.ccr/ca-bundle.crt", "rb").read())
+            ca = "/workspace/ca.pem"
+        ok = py(f"import ssl,urllib.request;ctx=ssl.create_default_context(cafile='{ca}');"
+                "print(urllib.request.urlopen('https://pypi.org/simple/pip/',context=ctx,timeout=30).status)")
+        assert ok["stdout"].strip() == "200", ok
+        denied = py("import urllib.request\ntry:\n urllib.request.urlopen('https://example.com',timeout=20)\n"
+                    "except Exception as e: print('blocked', e)")
+        assert "blocked" in denied["stdout"] and "403" in denied["stdout"]
+        direct = py("import socket\ntry:\n socket.create_connection(('1.1.1.1',443),5); print('OPEN')\n"
+                    "except OSError as e: print('no route')")
+        assert direct["stdout"].strip() == "no route"                    # bypassing the proxy is impossible
+        meta = py("import socket\ntry:\n socket.create_connection(('169.254.169.254',80),3); print('OPEN')\n"
+                  "except OSError: print('no route')")
+        assert meta["stdout"].strip() == "no route"
+        log = c.get(f"/api/v1/sandboxes/{sid}/network", headers=H).json()["log"]
+        assert {(l["host"], l["decision"]) for l in log} >= {("pypi.org", "allowed"), ("example.com", "denied")}
+        c.post(f"/api/v1/sandboxes/{sid}/stop", headers=H)
+        c.post(f"/api/v1/sandboxes/{sid}/start", headers=H)               # re-registered after restart
+        if ca == "/workspace/ca.pem":  # temporary (tmpfs) workspace: emptied by stop, as designed
+            assert py("import os;print(os.path.exists('/workspace/ca.pem'))")["stdout"].strip() == "False"
+            c.post(f"/api/v1/sandboxes/{sid}/files/upload?path=ca.pem", headers=H,
+                   content=open("/root/.ccr/ca-bundle.crt", "rb").read())
+        assert py(f"import ssl,urllib.request;ctx=ssl.create_default_context(cafile='{ca}');"
+                  "print(urllib.request.urlopen('https://pypi.org/simple/pip/',context=ctx,timeout=30).status)"
+                  )["stdout"].strip() == "200"
+    finally:
+        c.delete(f"/api/v1/sandboxes/{sid}", headers=H)
+        proxy.stop()
+        subprocess.run(["docker", "network", "rm", st.egress_network_name], capture_output=True)

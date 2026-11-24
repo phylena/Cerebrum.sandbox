@@ -92,11 +92,21 @@ class LeaseRequest(BaseModel):
 
 
 def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
-               runtimes: dict[str, Runtime] | None = None, http_factory=None, gpu_detector=None) -> FastAPI:
+               runtimes: dict[str, Runtime] | None = None, http_factory=None, gpu_detector=None,
+               egress=None) -> FastAPI:
     st = st or settings_mod.load()
     store = Store(st.data_dir)
+    if egress is None and st.egress_enabled:
+        from ..egress import EgressProxy, ensure_network
+        gateway = ensure_network(st.docker_bin, st.egress_network_name, st.egress_subnet)
+        st.egress_network, st.egress_proxy_url = st.egress_network_name, f"http://{gateway}:{st.egress_port}"
+        egress = EgressProxy(store, gateway, st.egress_port, upstream=st.egress_upstream_proxy or None)
+        egress.start()
     runtimes = runtimes or ({"docker": runtime} if runtime else build_runtimes(st))
     ctl = Controller(st, store, runtimes, http_factory=http_factory, gpu_detector=gpu_detector)
+    ctl.egress = egress
+    if egress:
+        ctl.recover()  # re-register policies of sandboxes that survived a restart
     keys = lambda: {"admin": st.admin_key, "operator": st.operator_key, "viewer": st.viewer_key}  # noqa: E731
     viewer, operator, admin = (Depends(require(r, keys, store)) for r in ("viewer", "operator", "admin"))
 
@@ -184,6 +194,17 @@ def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
         own(sid, p)
         ctl.kill_processes(sid, p.name)
         return {"ok": True}
+
+    @app.get("/api/v1/sandboxes/{sid}/network")
+    def sandbox_network(sid: str, limit: int = Query(200, ge=1, le=5000), p: Principal = viewer):
+        s = own(sid, p)
+        return {"policy": s["profile_snapshot"]["network"], "log": ctl.network_log(sid, limit)}
+
+    @app.get("/api/v1/network/log")
+    def network_log(limit: int = Query(200, ge=1, le=5000), decision: str | None = Query(None),
+                    _p: Principal = admin):
+        return {"stats": vars(ctl.egress.stats) if ctl.egress else None,
+                "log": ctl.network_log(None, limit, decision)}
 
     # ---- files and workspace ------------------------------------------------------
     @app.post("/api/v1/sandboxes/{sid}/files/upload", status_code=201)

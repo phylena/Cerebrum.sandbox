@@ -110,6 +110,10 @@ class Runtime(ABC):
             raise RuntimeError_(f"usage failed: {r.stderr.strip()[:200]}")
         return int(r.stdout.strip() or 0) * 1024
 
+    def address(self, sid: str, network: str) -> str | None:
+        """IP of the sandbox on a named network (None if not applicable)."""
+        return None
+
     def kill_processes(self, sid: str) -> None:
         """Kill every process of the sandbox user (left-over/background/setsid'd processes).
         The sandbox keeps running: its keeper process runs as a different user."""

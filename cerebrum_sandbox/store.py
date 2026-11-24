@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS leases (
 CREATE TABLE IF NOT EXISTS git_repos (
   sandbox_id TEXT NOT NULL, path TEXT NOT NULL, url TEXT NOT NULL, branch TEXT, base_sha TEXT NOT NULL,
   created_at REAL NOT NULL, PRIMARY KEY (sandbox_id, path));
+CREATE TABLE IF NOT EXISTS netlog (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, sandbox_id TEXT, src TEXT, method TEXT, host TEXT,
+  port INTEGER, decision TEXT NOT NULL, reason TEXT, bytes_up INTEGER, bytes_down INTEGER, duration_s REAL);
+CREATE INDEX IF NOT EXISTS netlog_sb ON netlog(sandbox_id, ts);
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
   target TEXT, outcome TEXT NOT NULL, detail TEXT);

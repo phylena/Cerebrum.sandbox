@@ -37,6 +37,14 @@ class Settings:
     # Docker network that only reaches the egress proxy (needed for allowlist profiles; empty = refuse them)
     egress_network: str = field(default_factory=lambda: _env("SANDBOX_EGRESS_NETWORK"))
     egress_proxy_url: str = field(default_factory=lambda: _env("SANDBOX_EGRESS_PROXY_URL"))
+    # Built-in egress proxy: 1 = create the internal network + run the proxy, and fill
+    # egress_network / egress_proxy_url automatically.
+    egress_enabled: bool = field(default_factory=lambda: _env("SANDBOX_EGRESS_ENABLED", "0") in ("1", "true", "yes"))
+    egress_network_name: str = field(default_factory=lambda: _env("SANDBOX_EGRESS_NETWORK_NAME", "csb-egress"))
+    egress_subnet: str = field(default_factory=lambda: _env("SANDBOX_EGRESS_SUBNET", "172.30.0.0/24"))
+    egress_port: int = field(default_factory=lambda: _int("SANDBOX_EGRESS_PORT", 3128))
+    egress_upstream_proxy: str = field(default_factory=lambda: _env("SANDBOX_EGRESS_UPSTREAM_PROXY"))
+    netlog_retention_days: int = field(default_factory=lambda: _int("SANDBOX_NETLOG_RETENTION_DAYS", 30))
     allowed_image_prefixes: list[str] = field(
         default_factory=lambda: _list("SANDBOX_ALLOWED_IMAGE_PREFIXES", "cerebrum-sandbox/"))
 

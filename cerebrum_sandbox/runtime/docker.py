@@ -140,6 +140,17 @@ class DockerRuntime(Runtime):
             return "missing"
         return {"running": "running", "paused": "paused"}.get(out.strip(), "stopped")
 
+    def address(self, sandbox_id: str, network: str) -> str | None:
+        rc, out, _ = self._runner([self.st.docker_bin, "inspect", "-f", "{{json .NetworkSettings.Networks}}",
+                                   container_name(sandbox_id)], 30)
+        if rc != 0:
+            return None
+        import json as _json
+        try:
+            return (_json.loads(out.strip() or "{}").get(network) or {}).get("IPAddress") or None
+        except ValueError:
+            return None
+
     def logs(self, sandbox_id: str, tail: int = 200) -> str:
         rc, out, err = self._runner([self.st.docker_bin, "logs", "--tail", str(max(1, min(tail, 5000))),
                                      container_name(sandbox_id)], 30)

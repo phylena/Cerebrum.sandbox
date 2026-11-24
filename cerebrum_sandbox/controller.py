@@ -36,6 +36,7 @@ class Controller:
         self._gpu_detector = gpu_detector or detect_gpus
         from .broker import Broker
         self.broker = Broker(st, store)
+        self.egress = None  # EgressProxy when SANDBOX_EGRESS_ENABLED (set by the app)
         self.git_fetcher = None  # tests may replace host-side cloning; default: git_ops.host_clone
         self._locks: dict[str, threading.Lock] = {}
         self._guard = threading.Lock()  # serialises quota check + insert
@@ -175,6 +176,33 @@ class Controller:
         self.store.x("DELETE FROM workers WHERE name=?", (name,))
         self.store.audit(actor, "worker.remove", name, "ok")
 
+    # ---- egress policy registration -------------------------------------------------
+    def _egress_register(self, sid: str) -> None:
+        if not self.egress:
+            return
+        s = self.get(sid)
+        net = s["profile_snapshot"]["network"]
+        if s["worker"] != "local" or net["mode"] != "allowlist":
+            return
+        ip = self._rt(s).address(sid, self.st.egress_network)
+        if not ip:
+            raise RuntimeError_("allowlist sandbox has no address on the egress network")
+        self.egress.remove_sandbox(sid)
+        self.egress.set_policy(ip, sid, net["allowed_domains"], net["allowed_ports"], net.get("log_requests", True))
+
+    def _egress_remove(self, sid: str) -> None:
+        if self.egress:
+            self.egress.remove_sandbox(sid)
+
+    def network_log(self, sid: str | None = None, limit: int = 200, decision: str | None = None) -> list[dict]:
+        where, args = [], []
+        if sid:
+            where.append("sandbox_id=?"); args.append(sid)
+        if decision:
+            where.append("decision=?"); args.append(decision)
+        q = "SELECT * FROM netlog" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?"
+        return [dict(r) for r in self.store.q(q, (*args, limit))]
+
     # ---- lifecycle --------------------------------------------------------------
     def _lock(self, sid: str) -> threading.Lock:
         with self._guard:
@@ -257,6 +285,7 @@ class Controller:
             try:
                 rt.create(SandboxSpec(sid, profile, env or {}, gpus))
                 rt.start(sid)
+                self._egress_register(sid)
             except RuntimeError_ as e:
                 self._fail(sid, str(e))
                 self.store.audit(actor, "sandbox.create", sid, "failed", {"error": str(e)})
@@ -267,6 +296,7 @@ class Controller:
         return self.get(sid)
 
     def _fail(self, sid: str, error: str) -> None:
+        self._egress_remove(sid)
         try:
             self._rt(self.get(sid)).destroy(sid, delete_workspace=True)
         except RuntimeError_:
@@ -283,6 +313,10 @@ class Controller:
                 self._set(sid, via)
             try:
                 op(self._rt(self.get(sid)), sid)
+                if final == State.RUNNING:
+                    self._egress_register(sid)  # a (re)started container may have a new address
+                elif final == State.STOPPED:
+                    self._egress_remove(sid)
             except RuntimeError_ as e:
                 self._set(sid, State.FAILED, redact(str(e))[:500])
                 self.store.audit(actor, f"sandbox.{action}", sid, "failed", {"error": str(e)})
@@ -315,6 +349,7 @@ class Controller:
                 self.store.audit(actor, "sandbox.destroy", sid, "failed", {"error": str(e)})
                 raise ControllerError(502, str(e)) from e
             self._set(sid, State.TERMINATED)
+        self._egress_remove(sid)
         self.broker.revoke_for_sandbox(sid)
         self.store.audit(actor, "sandbox.destroy", sid, "ok")
         return self.get(sid)
@@ -544,6 +579,11 @@ class Controller:
             elif want != state:
                 self.store.x("UPDATE sandboxes SET state=?, updated_at=? WHERE id=?", (want.value, time.time(), sid))
                 fixed["corrected"] += 1
+            if want in (State.RUNNING, State.PAUSED):
+                try:
+                    self._egress_register(sid)
+                except RuntimeError_:
+                    pass
         return fixed
 
     def cleanup_expired(self, actor: str = "system") -> list[str]:
