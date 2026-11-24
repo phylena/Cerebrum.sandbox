@@ -15,10 +15,12 @@ class FakeRuntime(Runtime):
         self.fail_create = False
         self.next_exec = ExecResult(0, "hi\n", "")
         self.calls: list = []
+        self.specs: dict = {}
 
     def create(self, spec):
         if self.fail_create:
             raise RuntimeError_("boom")
+        self.specs[spec.sandbox_id] = spec
         self.boxes[spec.sandbox_id] = "stopped"
 
     def start(self, sid): self.boxes[sid] = "running"

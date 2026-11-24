@@ -1,0 +1,10 @@
+#!/bin/sh
+# PID 1 inside the microVM (boot arg: init=/sbin/csb-init). Root fs is mounted read-only by Firecracker's drive flag.
+mount -t proc proc /proc; mount -t sysfs sys /sys; mount -t devtmpfs dev /dev 2>/dev/null
+mount -t tmpfs -o nosuid,nodev,noexec,size=64m tmpfs /tmp
+mount -t tmpfs -o nosuid,nodev,uid=10001,gid=10001,mode=0700,size=64m tmpfs /home/sandbox
+mount -t tmpfs tmpfs /run
+# Workspace = a separate block device whose size IS the quota.
+mount -o nosuid,nodev /dev/vdb /workspace && chown 10001:10001 /workspace
+ip link set lo up 2>/dev/null
+exec /usr/bin/python3 /usr/local/bin/csb-agent 5252

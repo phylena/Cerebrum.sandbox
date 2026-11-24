@@ -86,7 +86,7 @@ def test_allowlist_with_egress_uses_proxy_network():
 
 def test_gpu_and_unknown_image_refused():
     with pytest.raises(RuntimeError_, match="GPU"):
-        _args("training")
+        _args("training")  # no GPU indices assigned
     bad = BUILTIN["basic"].model_copy(update={"image": "evil/image:1"})
     with pytest.raises(RuntimeError_, match="not allowed"):
         build_create_args(SandboxSpec("abcdef012345", bad), Settings())
@@ -223,7 +223,8 @@ def test_recovery_and_persistence(st, rt):
     ctl.pause(b, "t")
     rt.boxes[a] = "stopped"          # drifted behind our back
     rt.boxes.pop(c)                  # runtime lost it
-    ctl.store.x("INSERT INTO sandboxes SELECT 'stuck000001',owner,profile,profile_json,'provisioning',runtime,"
+    ctl.store.x("INSERT INTO sandboxes(id,owner,profile,profile_json,state,runtime,error,created_at,updated_at,"
+                "expires_at) SELECT 'stuck000001',owner,profile,profile_json,'provisioning',runtime,"
                 "NULL,created_at,updated_at,NULL FROM sandboxes WHERE id=?", (a,))
     app2 = create_app(st, rt)        # "restart": new controller on the same database
     ctl2 = app2.state.controller

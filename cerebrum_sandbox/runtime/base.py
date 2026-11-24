@@ -14,6 +14,7 @@ class SandboxSpec:
     sandbox_id: str
     profile: Profile
     env: dict[str, str] = field(default_factory=dict)
+    gpu_indices: list[int] = field(default_factory=list)  # assigned by the scheduler
 
 
 @dataclass

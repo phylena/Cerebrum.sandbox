@@ -39,7 +39,11 @@ def build_create_args(spec: SandboxSpec, st: Settings) -> list[str]:
     if not _IMAGE.match(p.image) or not any(p.image.startswith(x) for x in st.allowed_image_prefixes):
         raise RuntimeError_(f"image '{p.image}' is not allowed (allowed prefixes: {st.allowed_image_prefixes})")
     if p.gpus:
-        raise RuntimeError_("GPU sandboxes need a GPU worker, which is not implemented yet")
+        if p.isolation != Isolation.CONTAINER:
+            raise RuntimeError_("GPU sandboxes are only supported with container isolation "
+                                "(gVisor GPU passthrough and microVM GPUs are not supported)")
+        if len(spec.gpu_indices) != p.gpus or len(set(spec.gpu_indices)) != p.gpus:
+            raise RuntimeError_(f"GPU sandboxes need {p.gpus} distinct GPU indices assigned by the scheduler")
     name = container_name(spec.sandbox_id)
     mem = f"{p.memory_mb}m"
     args = [
@@ -60,6 +64,8 @@ def build_create_args(spec: SandboxSpec, st: Settings) -> list[str]:
         args += ["--tmpfs", f"{WORKSPACE}:rw,nosuid,nodev,uid=10001,gid=10001,mode=0700,size={p.workspace_mb}m"]
     if p.isolation == Isolation.GVISOR:
         args += ["--runtime", st.gvisor_runtime]
+    if p.gpus:  # exactly the assigned devices, never "all"; needs the NVIDIA container toolkit on the host
+        args += ["--gpus", '"device=' + ",".join(str(int(i)) for i in spec.gpu_indices) + '"']
     env = {"HOME": "/home/sandbox", **p.env, **spec.env}
     if p.network.mode == NetworkMode.NONE:
         args += ["--network", "none"]
@@ -91,6 +97,7 @@ def _default_runner(args: list[str], timeout: int | None) -> tuple[int, str, str
 
 class DockerRuntime(Runtime):
     name = "docker"
+    isolation = Isolation.CONTAINER  # a runtime only accepts profiles of its own isolation level
 
     def __init__(self, st: Settings, runner: Runner | None = None):
         self.st = st
@@ -103,6 +110,9 @@ class DockerRuntime(Runtime):
         return out
 
     def create(self, spec: SandboxSpec) -> None:
+        if spec.profile.isolation != self.isolation:  # never silently run a profile at a weaker level
+            raise RuntimeError_(f"runtime '{self.name}' only runs '{self.isolation}' sandboxes, "
+                                f"not '{spec.profile.isolation}'")
         self._docker(*build_create_args(spec, self.st), timeout=120)
 
     def start(self, sandbox_id: str) -> None:

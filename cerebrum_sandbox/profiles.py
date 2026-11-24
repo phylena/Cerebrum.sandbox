@@ -11,7 +11,11 @@ from .policy import NetworkMode, NetworkPolicy
 class Isolation(StrEnum):
     CONTAINER = "container"  # hardened runc container (default)
     GVISOR = "gvisor"        # runsc user-space kernel
-    # microvm (Firecracker/libkrun) is a later adapter; deliberately not selectable yet.
+    MICROVM = "microvm"      # Firecracker microVM (own kernel, KVM)
+
+
+RANK = {Isolation.CONTAINER: 0, Isolation.GVISOR: 1, Isolation.MICROVM: 2}
+RUNTIME_FOR = {Isolation.CONTAINER: "docker", Isolation.GVISOR: "gvisor", Isolation.MICROVM: "firecracker"}
 
 
 _NAME = re.compile(r"^[a-z][a-z0-9-]{1,39}$")

@@ -52,12 +52,13 @@ Because AI-generated code is untrusted, the recommended production default on AW
 | `profiles` (basic, development, research, training, browser, mcp + admin custom; extra fields forbidden) | done; training/browser/mcp/research images not yet built |
 | `policy` (network model, strict domain validation) | model done; **enforcement only for `none`**. Allowlist needs an internal Docker network + egress proxy (phase 9); until configured the adapter refuses (fail closed) |
 | `runtime/base` + `runtime/docker` | done, hardening unit-tested, live behaviour unverified |
+| `runtime/gvisor`, `runtime/firecracker` (+ guest agent), `runtime/remote`, `runtime/registry`, `scheduler` (placement, exclusive GPU assignment) | done and tested against fakes / real agent code; **not run on real runsc, KVM or GPU hardware**. See [runtimes.md](runtimes.md) |
 | `controller` (create/start/stop/pause/resume/destroy, quotas, execute, recovery, TTL cleanup) | done |
 | `store` (SQLite WAL metadata, audit, online backup) | done |
 | `redact` | done |
 | `resources` (CPU/mem/disk/KVM/GPU detection) | done |
 | `api` (sandboxes, execute, executions, logs, profiles, resources, audit, health) | done |
-| files/workspace API, git, credential broker, scheduler/jobs/workers, GPU scheduling, snapshots, metrics, dashboard, Cerebrum tool, AWS IaC, extra runtimes | **not started** (see roadmap) |
+| files/workspace API, git, credential broker, job queue/retries, snapshots, metrics, dashboard, Cerebrum tool, AWS IaC, Firecracker jailer/network, OpenSandbox adapter | **not started** (see roadmap) |
 
 ## 4. Security model (current)
 - Commands are **argv vectors** only: no shell string is built by the platform.
@@ -71,4 +72,5 @@ Start: **one EC2 instance** (e.g. m7i/c7i for CPU; `g5/g6` for GPU; a `.metal` t
 
 ## 6. Roadmap (phases from the brief)
 Done in this change: **1** (repo + architecture), **2** (API+controller), **3** (Docker runtime), **4** (lifecycle), **5** (execution engine, core), parts of **8** (hardening), **10** (audit/redaction), **16** (tests).
+Added since: **12** (placement across local + remote workers; queue/retries still open), **13** (GPU workers), **14** (gVisor, Firecracker, remote-worker adapters; OpenSandbox not done).
 Next, in order: 6 workspaces+files API (quota enforcement) -> 7 git (clone/branch/diff/commit in sandbox; credential broker with short-lived tokens, creds never in sandbox) -> 9 allowlist egress proxy + netlog -> 11 Cerebrum integration (a `sandbox` tool in `brain/app/tools.py`, minimal PR to Cerebrum.model, uses the operator key) -> 12 scheduler/queue/jobs/workers -> 13 GPU workers -> 14 gVisor verification, OpenSandbox/Firecracker adapters -> 15 dashboard -> 17 AWS IaC -> 18 docs.

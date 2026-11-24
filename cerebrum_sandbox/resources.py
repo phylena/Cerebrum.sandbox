@@ -32,9 +32,9 @@ def detect_gpus() -> list[dict]:
     return gpus
 
 
-def host_resources(data_dir: Path) -> dict:
+def host_resources(data_dir: Path, gpus: list[dict] | None = None) -> dict:
     data_dir.mkdir(parents=True, exist_ok=True)
     du = shutil.disk_usage(data_dir)
     return {"cpu_count": os.cpu_count(), "load_avg": list(os.getloadavg()), "memory": _meminfo(),
             "disk": {"total_mb": du.total // 2**20, "free_mb": du.free // 2**20},
-            "kvm": os.path.exists("/dev/kvm"), "gpus": detect_gpus()}
+            "kvm": os.path.exists("/dev/kvm"), "gpus": detect_gpus() if gpus is None else gpus}

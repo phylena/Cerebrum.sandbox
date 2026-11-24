@@ -28,7 +28,10 @@ class Settings:
     operator_key: str = field(default_factory=lambda: _env("SANDBOX_OPERATOR_KEY"))  # Cerebrum uses this
     viewer_key: str = field(default_factory=lambda: _env("SANDBOX_VIEWER_KEY"))
 
-    runtime: str = field(default_factory=lambda: _env("SANDBOX_RUNTIME", "docker"))
+    # Which local runtimes this node offers: docker, gvisor, firecracker (comma separated).
+    runtimes: list[str] = field(default_factory=lambda: _list("SANDBOX_RUNTIMES", "docker"))
+    # Weakest isolation allowed on this node; weaker profiles are upgraded to this (e.g. "gvisor").
+    min_isolation: str = field(default_factory=lambda: _env("SANDBOX_MIN_ISOLATION", "container"))
     docker_bin: str = field(default_factory=lambda: _env("SANDBOX_DOCKER_BIN", "docker"))
     gvisor_runtime: str = field(default_factory=lambda: _env("SANDBOX_GVISOR_RUNTIME", "runsc"))
     # Docker network that only reaches the egress proxy (needed for allowlist profiles; empty = refuse them)
@@ -36,6 +39,22 @@ class Settings:
     egress_proxy_url: str = field(default_factory=lambda: _env("SANDBOX_EGRESS_PROXY_URL"))
     allowed_image_prefixes: list[str] = field(
         default_factory=lambda: _list("SANDBOX_ALLOWED_IMAGE_PREFIXES", "cerebrum-sandbox/"))
+
+    # Firecracker (microVM) runtime. Needs /dev/kvm, a kernel and a rootfs built by images/firecracker/.
+    fc_bin: str = field(default_factory=lambda: _env("SANDBOX_FC_BIN", "firecracker"))
+    fc_kernel: str = field(default_factory=lambda: _env("SANDBOX_FC_KERNEL"))
+    fc_rootfs: str = field(default_factory=lambda: _env("SANDBOX_FC_ROOTFS"))
+    fc_dir: str = field(default_factory=lambda: _env("SANDBOX_FC_DIR", "/var/lib/cerebrum-sandbox/fc"))
+    fc_boot_args: str = field(default_factory=lambda: _env(
+        "SANDBOX_FC_BOOT_ARGS", "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/csb-init"))
+    fc_agent_port: int = field(default_factory=lambda: _int("SANDBOX_FC_AGENT_PORT", 5252))
+    fc_boot_timeout_s: int = field(default_factory=lambda: _int("SANDBOX_FC_BOOT_TIMEOUT_S", 30))
+    # GPUs: restrict which host GPU indices sandboxes may use (empty = all detected), and cap GPU sandboxes.
+    gpu_indices: list[int] = field(default_factory=lambda: [int(x) for x in _list("SANDBOX_GPU_INDICES")])
+    max_gpu_sandboxes: int = field(default_factory=lambda: _int("SANDBOX_MAX_GPU_SANDBOXES", 2))
+    # Worker fleet (other nodes running this same service)
+    max_workers: int = field(default_factory=lambda: _int("SANDBOX_MAX_WORKERS", 16))
+    worker_timeout_s: int = field(default_factory=lambda: _int("SANDBOX_WORKER_TIMEOUT_S", 30))
 
     # Hard ceilings: profiles and requests are clamped/refused above these.
     max_sandboxes: int = field(default_factory=lambda: _int("SANDBOX_MAX_SANDBOXES", 8))
