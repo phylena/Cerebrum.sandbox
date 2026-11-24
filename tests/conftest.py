@@ -60,6 +60,20 @@ class FakeRuntime(Runtime):
     def workspace_usage_bytes(self, sid):
         return sum(len(d) for (s, _), d in self.files.items() if s == sid)
 
+    def export_workspace(self, sid, *, max_bytes):
+        import json as _j
+        blob = _j.dumps({p: d.decode("latin-1") for (s, p), d in self.files.items() if s == sid}).encode()
+        if len(blob) > max_bytes:
+            raise RuntimeError_("snapshot failed: workspace larger than the snapshot limit")
+        return blob
+
+    def import_workspace(self, sid, tar, *, clear):
+        import json as _j
+        if clear:
+            self.files = {k: v for k, v in self.files.items() if k[0] != sid}
+        for p, d in _j.loads(tar).items():
+            self.files[(sid, p)] = d.encode("latin-1")
+
     def kill_processes(self, sid):
         self.calls.append((sid, "kill"))
 

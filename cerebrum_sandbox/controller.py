@@ -546,6 +546,61 @@ class Controller:
         self.store.audit(actor, "git.report", sid, "ok", {"repo": path, "commits": len(rep["commits"])})
         return rep
 
+    # ---- snapshots (workspace state; no memory/process state is captured) ------------------
+    def _snap_dir(self):
+        d = self.st.data_dir / "snapshots"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def snapshots(self, sid: str | None = None) -> list[dict]:
+        q = "SELECT * FROM snapshots" + (" WHERE sandbox_id=?" if sid else "") + " ORDER BY created_at DESC"
+        return [dict(r) for r in self.store.q(q, (sid,) if sid else ())]
+
+    def get_snapshot(self, snap: str) -> dict:
+        rows = self.store.q("SELECT * FROM snapshots WHERE id=?", (snap,))
+        if not rows:
+            raise ControllerError(404, "Snapshot not found")
+        return dict(rows[0])
+
+    def snapshot(self, sid: str, actor: str, label: str | None = None) -> dict:
+        import gzip
+        import hashlib
+        s, rt = self._running(sid)
+        used = sum(x["size"] for x in self.snapshots())
+        if used >= self.st.snapshot_storage_mb * 2**20:
+            raise ControllerError(507, "snapshot storage quota reached")
+        tar = self._op(actor, "snapshot.export", sid, lambda: rt.export_workspace(sid, max_bytes=self.st.snapshot_max_bytes))
+        blob = gzip.compress(tar, 6)
+        if used + len(blob) > self.st.snapshot_storage_mb * 2**20:
+            raise ControllerError(507, "snapshot storage quota would be exceeded")
+        snap = "snap_" + uuid.uuid4().hex[:12]
+        (self._snap_dir() / f"{snap}.tar.gz").write_bytes(blob)
+        self.store.x("INSERT INTO snapshots VALUES (?,?,?,?,?,?,?,?)",
+                     (snap, sid, s["owner"], (label or "")[:200], "workspace", len(blob),
+                      hashlib.sha256(blob).hexdigest(), time.time()))
+        for old in self.snapshots(sid)[self.st.snapshots_per_sandbox:]:  # keep the newest N
+            self.delete_snapshot(old["id"], "system")
+        self.store.audit(actor, "snapshot.create", snap, "ok", {"sandbox": sid, "bytes": len(blob)})
+        return self.get_snapshot(snap)
+
+    def restore(self, snap: str, sid: str, actor: str, clear: bool = True) -> dict:
+        import gzip
+        import hashlib
+        meta = self.get_snapshot(snap)
+        _, rt = self._running(sid)
+        blob = (self._snap_dir() / f"{snap}.tar.gz").read_bytes()
+        if hashlib.sha256(blob).hexdigest() != meta["sha256"]:
+            raise ControllerError(500, "snapshot file is corrupted (checksum mismatch)")
+        self._op(actor, "snapshot.restore", sid, lambda: rt.import_workspace(sid, gzip.decompress(blob), clear=clear),
+                 {"snapshot": snap})
+        return {"snapshot": snap, "sandbox": sid, "restored": True, "kind": "workspace"}
+
+    def delete_snapshot(self, snap: str, actor: str) -> None:
+        self.get_snapshot(snap)
+        (self._snap_dir() / f"{snap}.tar.gz").unlink(missing_ok=True)
+        self.store.x("DELETE FROM snapshots WHERE id=?", (snap,))
+        self.store.audit(actor, "snapshot.delete", snap, "ok")
+
     def metrics(self, sid: str) -> dict:
         s = self.get(sid)
         ex = {r["status"]: r["n"] for r in self.store.q(

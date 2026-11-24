@@ -118,6 +118,23 @@ class Runtime(ABC):
         """IP of the sandbox on a named network (None if not applicable)."""
         return None
 
+    def export_workspace(self, sid: str, *, max_bytes: int) -> bytes:
+        """tar of /workspace (taken inside the sandbox; the host never extracts it)."""
+        import base64
+        r = self._sh(sid, 'tar -c -C /workspace . | base64 -w0; exit "${PIPESTATUS:-0}"', timeout_s=600,
+                     max_output_bytes=max_bytes * 4 // 3 + 1024)
+        if r.exit_code != 0 or r.truncated:
+            raise RuntimeError_("snapshot failed: " + ("workspace larger than the snapshot limit" if r.truncated
+                                                        else r.stderr.strip()[:200]))
+        return base64.b64decode(r.stdout)
+
+    def import_workspace(self, sid: str, tar: bytes, *, clear: bool) -> None:
+        script = ('find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + ; ' if clear else '') + \
+            'tar -x --no-same-owner --no-same-permissions -C /workspace'
+        r = self._sh(sid, script, stdin=tar, timeout_s=600)
+        if r.exit_code != 0:
+            raise RuntimeError_(f"restore failed: {r.stderr.strip()[:200]}")
+
     def kill_processes(self, sid: str) -> None:
         """Kill every process of the sandbox user (left-over/background/setsid'd processes).
         The sandbox keeps running: its keeper process runs as a different user."""

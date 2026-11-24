@@ -331,3 +331,28 @@ def test_job_and_live_metrics_real_docker(tmp_path):
         assert m["live"]["pids"] is not None and "MiB" in m["live"]["memory"] and m["workspace_used_bytes"] == 0
     finally:
         c.delete(f"/api/v1/sandboxes/{sid}", headers=H)
+
+
+def test_snapshot_restore_into_new_sandbox_real_docker(tmp_path):
+    st = Settings(data_dir=tmp_path, operator_key="op", viewer_key="vw", admin_key="adm")
+    c = TestClient(create_app(st))
+    H = {"Authorization": "Bearer op"}
+    a = c.post("/api/v1/sandboxes", json={"profile": "basic"}, headers=H).json()["id"]
+    b = c.post("/api/v1/sandboxes", json={"profile": "basic"}, headers=H).json()["id"]
+    run = lambda sid, s: c.post(f"/api/v1/sandboxes/{sid}/execute", headers=H,  # noqa: E731
+                                json={"argv": ["bash", "-c", s]}).json()
+    try:
+        run(a, "mkdir -p d && echo v1 > d/f && ln -s /etc/passwd d/link && chmod 700 d")
+        snap = c.post(f"/api/v1/sandboxes/{a}/snapshots", json={"label": "v1"}, headers=H).json()
+        assert snap["kind"] == "workspace" and snap["size"] > 0
+        run(a, "echo v2 > d/f && touch junk")
+        c.post(f"/api/v1/sandboxes/{a}/restore", json={"snapshot_id": snap["id"]}, headers=H)
+        assert run(a, "cat d/f; ls")["stdout"] == "v1\nd\n"                   # rolled back, junk removed
+        r = c.post(f"/api/v1/sandboxes/{b}/restore", json={"snapshot_id": snap["id"]}, headers=H)
+        assert r.status_code == 200 and run(b, "cat d/f; readlink d/link")["stdout"] == "v1\n/etc/passwd\n"
+        assert run(b, "id -u; stat -c %u d/f")["stdout"] == "10001\n10001\n"
+        assert len(c.get(f"/api/v1/sandboxes/{a}/snapshots", headers=H).json()) == 1
+        assert c.delete(f"/api/v1/snapshots/{snap['id']}", headers=H).json()["ok"]
+    finally:
+        c.delete(f"/api/v1/sandboxes/{a}", headers=H)
+        c.delete(f"/api/v1/sandboxes/{b}", headers=H)

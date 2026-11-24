@@ -74,6 +74,10 @@ class Settings:
     git_max_bytes: int = field(default_factory=lambda: _int("SANDBOX_GIT_MAX_BYTES", 500 * 2**20))
     git_timeout_s: int = field(default_factory=lambda: _int("SANDBOX_GIT_TIMEOUT_S", 300))
 
+    # Workspace snapshots (stored compressed under data_dir/snapshots)
+    snapshot_max_bytes: int = field(default_factory=lambda: _int("SANDBOX_SNAPSHOT_MAX_BYTES", 1024 * 2**20))
+    snapshot_storage_mb: int = field(default_factory=lambda: _int("SANDBOX_SNAPSHOT_STORAGE_MB", 20480))
+    snapshots_per_sandbox: int = field(default_factory=lambda: _int("SANDBOX_SNAPSHOTS_PER_SANDBOX", 10))
     # Jobs (one-shot sandboxes run by the scheduler)
     max_concurrent_jobs: int = field(default_factory=lambda: _int("SANDBOX_MAX_CONCURRENT_JOBS", 2))
     max_queued_jobs: int = field(default_factory=lambda: _int("SANDBOX_MAX_QUEUED_JOBS", 200))

@@ -78,6 +78,15 @@ class GitCommit(BaseModel):
     repo: str | None = None
 
 
+class SnapshotRequest(BaseModel):
+    label: str | None = Field(None, max_length=200)
+
+
+class RestoreRequest(BaseModel):
+    snapshot_id: str
+    clear: bool = Field(True, description="empty the workspace first")
+
+
 class AddCredential(BaseModel):
     name: str
     kind: str = Field(description="token | github_app")
@@ -345,6 +354,36 @@ def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
             raise HTTPException(404, "lease not found")
         ctl.broker.revoke_lease(lid, p.name)
         return {"ok": True}
+
+    # ---- snapshots ---------------------------------------------------------------------
+    @app.post("/api/v1/sandboxes/{sid}/snapshots", status_code=201)
+    def create_snapshot(sid: str, body: SnapshotRequest | None = None, p: Principal = operator):
+        own(sid, p)
+        return ctl.snapshot(sid, p.name, body.label if body else None)
+
+    @app.get("/api/v1/sandboxes/{sid}/snapshots")
+    def list_snapshots(sid: str, p: Principal = viewer):
+        own(sid, p)
+        return ctl.snapshots(sid)
+
+    @app.post("/api/v1/sandboxes/{sid}/restore")
+    def restore_snapshot(sid: str, body: RestoreRequest, p: Principal = operator):
+        own(sid, p)
+        snap = ctl.get_snapshot(body.snapshot_id)
+        if not p.may_see(snap["owner"]):
+            raise HTTPException(404, "Snapshot not found")
+        return ctl.restore(body.snapshot_id, sid, p.name, body.clear)
+
+    @app.delete("/api/v1/snapshots/{snap}")
+    def delete_snapshot(snap: str, p: Principal = operator):
+        if not p.may_see(ctl.get_snapshot(snap)["owner"]):
+            raise HTTPException(404, "Snapshot not found")
+        ctl.delete_snapshot(snap, p.name)
+        return {"ok": True}
+
+    @app.get("/api/v1/whoami")
+    def whoami(p: Principal = viewer):
+        return {"role": p.role, "name": p.name, "owner": p.owner}
 
     @app.get("/api/v1/sandboxes/{sid}/metrics")
     def sandbox_metrics(sid: str, p: Principal = viewer):
