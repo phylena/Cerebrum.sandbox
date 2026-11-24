@@ -279,7 +279,7 @@ class FirecrackerRuntime(Runtime):
         problems = self._missing()
         return {"runtime": "firecracker", "ok": not problems, "detail": "; ".join(problems) or "ready"}
 
-    def execute(self, sid, argv, *, workdir, env, timeout_s, max_output_bytes) -> ExecResult:
+    def execute(self, sid, argv, *, workdir, env, timeout_s, max_output_bytes, stdin=None) -> ExecResult:
         if self.status(sid) != "running":
             raise RuntimeError_("microVM is not running")
         for k in env:
@@ -287,6 +287,9 @@ class FirecrackerRuntime(Runtime):
                 raise RuntimeError_(f"bad environment variable name '{k}'")
         req = {"op": "exec", "argv": argv, "workdir": safe_workdir(workdir), "timeout_s": timeout_s,
                "max_output_bytes": max_output_bytes, "env": {**self._cfg(sid)["env"], **env}}
+        if stdin is not None:
+            import base64
+            req["stdin_b64"] = base64.b64encode(stdin).decode()
         t0 = time.monotonic()
         # JSON escaping can inflate output (up to ~6x for control bytes): bound the read generously
         r = agent_call(str(self._dir(sid) / "v.sock"), self.st.fc_agent_port, req, timeout_s + 15,

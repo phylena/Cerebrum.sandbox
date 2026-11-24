@@ -20,7 +20,8 @@ from ..profiles import Isolation
 from ..settings import Settings
 from .base import ExecResult, Runtime, RuntimeError_, SandboxSpec, WORKSPACE, safe_workdir
 
-UID = "10001:10001"
+UID = "10001:10001"          # the sandbox user: every command runs as this
+KEEPER_UID = "65534:65534"   # nobody: runs PID 1 so the sandbox user cannot kill the sandbox itself
 _ID = re.compile(r"^[a-f0-9]{12}$")
 _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _IMAGE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,127}(:[A-Za-z0-9._-]{1,64})?$")
@@ -50,7 +51,7 @@ def build_create_args(spec: SandboxSpec, st: Settings) -> list[str]:
         "create", "--name", name,
         "--label", "cerebrum.sandbox=1", "--label", f"cerebrum.sandbox.id={spec.sandbox_id}",
         "--hostname", "sandbox", "--init",
-        "--user", UID, "--read-only",
+        "--user", KEEPER_UID, "--read-only",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--pids-limit", str(p.pids), "--memory", mem, "--memory-swap", mem,
         "--cpus", f"{p.cpu:g}", "--ulimit", "nofile=1024:1024", "--ulimit", "core=0",
@@ -151,8 +152,10 @@ class DockerRuntime(Runtime):
             return {"runtime": "docker", "ok": False, "detail": str(e)}
         return {"runtime": "docker", "ok": rc == 0, "detail": out.strip() if rc == 0 else err.strip()[:200]}
 
-    def execute(self, sandbox_id, argv, *, workdir, env, timeout_s, max_output_bytes) -> ExecResult:
+    def execute(self, sandbox_id, argv, *, workdir, env, timeout_s, max_output_bytes, stdin=None) -> ExecResult:
         cmd = [self.st.docker_bin, "exec", "--user", UID, "--workdir", safe_workdir(workdir)]
+        if stdin is not None:
+            cmd.append("-i")
         for k, v in sorted(env.items()):
             if not _ENV_KEY.match(k):
                 raise RuntimeError_(f"bad environment variable name '{k}'")
@@ -160,7 +163,20 @@ class DockerRuntime(Runtime):
         # The in-container `timeout` kills runaway processes; the host-side limit is a backstop.
         cmd += [container_name(sandbox_id), "timeout", "-k", "2", str(timeout_s), *argv]
         t0 = time.monotonic()
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL)
+        if stdin is not None:
+            def feed():
+                try:
+                    proc.stdin.write(stdin)
+                except (BrokenPipeError, OSError):
+                    pass
+                finally:
+                    try:
+                        proc.stdin.close()
+                    except OSError:
+                        pass
+            threading.Thread(target=feed, daemon=True).start()
         bufs: dict[str, bytearray] = {"out": bytearray(), "err": bytearray()}
         over = {"out": False, "err": False}
 

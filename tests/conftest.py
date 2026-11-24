@@ -32,7 +32,7 @@ class FakeRuntime(Runtime):
     def logs(self, sid, tail=200): return "token=abcdef123456 started"
     def health(self): return {"runtime": "fake", "ok": True}
 
-    def execute(self, sid, argv, *, workdir, env, timeout_s, max_output_bytes):
+    def execute(self, sid, argv, *, workdir, env, timeout_s, max_output_bytes, stdin=None):
         self.calls.append((sid, argv, workdir, env, timeout_s))
         return self.next_exec
 

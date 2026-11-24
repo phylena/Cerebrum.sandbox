@@ -66,7 +66,7 @@ def _args(profile="basic", **st_kw):
 def test_docker_hardening_flags():
     a = _args()
     s = " ".join(a)
-    for needed in ("--read-only", "--cap-drop ALL", "no-new-privileges", "--user 10001:10001",
+    for needed in ("--read-only", "--cap-drop ALL", "no-new-privileges", "--user 65534:65534",
                    "--network none", "--pids-limit 64", "--memory 256m", "--memory-swap 256m"):
         assert needed in s
     for forbidden in ("--privileged", "docker.sock", "--cap-add", "--pid host", "--network host", "-v ", "bind"):

@@ -61,11 +61,19 @@ class Agent:
             wd = self._workdir(req.get("workdir"))
         except ValueError as e:
             return {"error": str(e)}
+        stdin = None
+        if req.get("stdin_b64") is not None:
+            import base64
+            try:
+                stdin = base64.b64decode(req["stdin_b64"], validate=True)
+            except (ValueError, TypeError):
+                return {"error": "stdin_b64 is not valid base64"}
         timeout = max(1, int(req.get("timeout_s") or 60))
         limit = max(1, int(req.get("max_output_bytes") or 262144))
         t0 = time.monotonic()
         try:
-            p = subprocess.Popen(argv, cwd=wd, env={**BASE_ENV, **env}, stdin=subprocess.DEVNULL,
+            p = subprocess.Popen(argv, cwd=wd, env={**BASE_ENV, **env},
+                                 stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
                                  preexec_fn=self._preexec())
         except (OSError, subprocess.SubprocessError) as e:
@@ -81,6 +89,18 @@ class Agent:
                 if len(chunk) > room:
                     over[k] = True
 
+        if stdin is not None:
+            def feed():
+                try:
+                    p.stdin.write(stdin)
+                except OSError:
+                    pass
+                finally:
+                    try:
+                        p.stdin.close()
+                    except OSError:
+                        pass
+            threading.Thread(target=feed, daemon=True).start()
         ts = [threading.Thread(target=drain, args=(p.stdout, "o"), daemon=True),
               threading.Thread(target=drain, args=(p.stderr, "e"), daemon=True)]
         for t in ts:

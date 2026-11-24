@@ -103,7 +103,14 @@ class RemoteRuntime(Runtime):
             return {"runtime": "remote", "ok": False, "detail": str(e)}
         return {"runtime": "remote", "ok": h.get("status") == "ok", "detail": h.get("status", "")}
 
-    def execute(self, sid, argv, *, workdir, env, timeout_s, max_output_bytes) -> ExecResult:
-        r = self._req("POST", f"/api/v1/sandboxes/{sid}/execute",
-                      {"argv": argv, "workdir": workdir, "env": env, "timeout_s": timeout_s})
+    def execute(self, sid, argv, *, workdir, env, timeout_s, max_output_bytes, stdin=None) -> ExecResult:
+        body = {"argv": argv, "workdir": workdir, "env": env, "timeout_s": timeout_s}
+        if stdin is not None:
+            import base64
+            body["stdin_b64"] = base64.b64encode(stdin).decode()
+        r = self._req("POST", f"/api/v1/sandboxes/{sid}/execute", body)
         return ExecResult(r["exit_code"], r["stdout"], r["stderr"], r["timed_out"], r["truncated"], r["duration_s"])
+
+    # Forward the generic operations as whole API calls (one round trip, worker-side limits apply).
+    def kill_processes(self, sid: str) -> None:
+        self._req("POST", f"/api/v1/sandboxes/{sid}/processes/kill")
