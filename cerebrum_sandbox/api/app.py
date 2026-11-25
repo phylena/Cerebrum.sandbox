@@ -434,7 +434,7 @@ def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
     # ---- monitoring ----------------------------------------------------------------------
     @app.get("/api/v1/events")
     def events(limit: int = Query(100, ge=1, le=1000), severity: str | None = None, _p: Principal = viewer):
-        return ctl.events.list(limit, severity)
+        return ctl.events.list_events(limit, severity)
 
     @app.post("/api/v1/maintenance/run")
     def run_maintenance(_p: Principal = admin):

@@ -46,7 +46,7 @@ class Events:
         except Exception:  # noqa: BLE001  alerting is best effort
             pass
 
-    def list(self, limit: int = 100, severity: str | None = None) -> list[dict]:
+    def list_events(self, limit: int = 100, severity: str | None = None) -> list[dict]:
         q = "SELECT * FROM events" + (" WHERE severity=?" if severity else "") + " ORDER BY last_ts DESC LIMIT ?"
         return [dict(r) for r in self.store.q(q, (severity, limit) if severity else (limit,))]
 

@@ -157,7 +157,7 @@ def test_events_dedupe_and_webhook(tmp_path):
     ev.emit("worker_offline", "critical", "w1", "down token=abcdef123456")
     ev.emit("worker_offline", "critical", "w1", "still down")
     ev.emit("worker_offline", "critical", "w2", "down")
-    rows = ev.list()
+    rows = ev.list_events()
     assert {(r["target"], r["count"]) for r in rows} == {("w1", 2), ("w2", 1)}
     assert all("abcdef123456" not in r["message"] for r in rows)
     time.sleep(0.3)
