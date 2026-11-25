@@ -232,7 +232,15 @@ class Controller:
             floor = Isolation(self.st.min_isolation)
         except ValueError as e:
             raise ControllerError(500, f"bad SANDBOX_MIN_ISOLATION '{self.st.min_isolation}'") from e
-        return base if RANK[base] >= RANK[floor] else floor
+        iso = base if RANK[base] >= RANK[floor] else floor
+        # A node without any container runtime (e.g. a Hugging Face Space) may serve the default container
+        # level with the process runtime, but only when the operator enabled it, never for an explicit
+        # request, and never below the node's floor. The sandbox is recorded as "process", not "container".
+        if (iso == Isolation.CONTAINER and not requested and self.st.process_fallback
+                and RUNTIME_FOR[iso] not in self.runtimes and "process" in self.runtimes
+                and RANK[Isolation.PROCESS] >= RANK[floor]):
+            return Isolation.PROCESS
+        return iso
 
     def _local_capacity(self) -> Capacity:
         gpus = sorted(g["index"] for g in self._gpu_detector())

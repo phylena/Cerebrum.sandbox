@@ -6,8 +6,10 @@ from .base import Runtime
 from .docker import DockerRuntime
 from .firecracker import FirecrackerRuntime
 from .gvisor import GVisorRuntime
+from .process import ProcessRuntime
 
-FACTORIES = {"docker": DockerRuntime, "gvisor": GVisorRuntime, "firecracker": FirecrackerRuntime}
+FACTORIES = {"docker": DockerRuntime, "gvisor": GVisorRuntime, "firecracker": FirecrackerRuntime,
+             "process": ProcessRuntime}
 
 
 def build_runtimes(st: Settings) -> dict[str, Runtime]:

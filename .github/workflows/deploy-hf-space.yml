@@ -1,0 +1,32 @@
+# Publishes this repository's Hugging Face Space (layout in deploy/huggingface/space.json).
+# Needs the repository secret HF_TOKEN (fine-grained, write access to the Space only).
+# Note: Docker Spaces need a Hugging Face PRO (or organization) plan to run; the upload works either way
+# only once the Space exists. Secrets/variables of the Space are set separately (Cerebrum.model:
+# deploy/huggingface/ecosystem.py), never from here.
+name: Deploy to Hugging Face Space
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency: { group: hf-space, cancel-in-progress: true }
+permissions: { contents: read }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the token is configured
+        env: { HF_TOKEN: "${{ secrets.HF_TOKEN }}" }
+        run: |
+          if [ -z "$HF_TOKEN" ]; then echo "::error::Add the HF_TOKEN repository secret first."; exit 1; fi
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install huggingface_hub
+      - name: Push the Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+        run: python deploy/huggingface/push_space.py
+      - name: Report
+        if: always()
+        run: echo "Deploy of $(python -c "import json;print(json.load(open('deploy/huggingface/space.json'))['space'])"): ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"

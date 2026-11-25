@@ -1,0 +1,12 @@
+{
+  "space": "phylena/cerebrum-sandbox",
+  "source": "Cerebrum.sandbox",
+  "sdk": "docker",
+  "copy": {
+    "deploy/huggingface/Dockerfile": "Dockerfile",
+    "deploy/huggingface/SPACE_README.md": "README.md",
+    "deploy/huggingface/start.sh": "start.sh",
+    "pyproject.toml": "pyproject.toml",
+    "cerebrum_sandbox": "cerebrum_sandbox"
+  }
+}

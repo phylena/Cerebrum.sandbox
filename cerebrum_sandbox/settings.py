@@ -33,6 +33,15 @@ class Settings:
     # Weakest isolation allowed on this node; weaker profiles are upgraded to this (e.g. "gvisor").
     min_isolation: str = field(default_factory=lambda: _env("SANDBOX_MIN_ISOLATION", "container"))
     docker_bin: str = field(default_factory=lambda: _env("SANDBOX_DOCKER_BIN", "docker"))
+    # Process runtime (hosts without Docker, e.g. a Hugging Face Space). Weaker than a container: see
+    # runtime/process.py. PROCESS_FALLBACK=1 serves container profiles with it when this node has no
+    # container runtime (the sandbox is then recorded and reported as isolation "process").
+    process_fallback: bool = field(default_factory=lambda: _env("SANDBOX_PROCESS_FALLBACK", "0") in ("1", "true", "yes"))
+    process_mode: str = field(default_factory=lambda: _env("SANDBOX_PROCESS_MODE", "auto"))  # auto|bwrap|landlock
+    process_allow_weak: bool = field(
+        default_factory=lambda: _env("SANDBOX_PROCESS_ALLOW_WEAK", "0") in ("1", "true", "yes"))
+    process_bwrap_bin: str = field(default_factory=lambda: _env("SANDBOX_PROCESS_BWRAP", "bwrap"))
+    process_root: str = field(default_factory=lambda: _env("SANDBOX_PROCESS_ROOT"))
     gvisor_runtime: str = field(default_factory=lambda: _env("SANDBOX_GVISOR_RUNTIME", "runsc"))
     # Docker network that only reaches the egress proxy (needed for allowlist profiles; empty = refuse them)
     egress_network: str = field(default_factory=lambda: _env("SANDBOX_EGRESS_NETWORK"))
