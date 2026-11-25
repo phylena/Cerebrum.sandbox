@@ -121,9 +121,9 @@ class Runtime(ABC):
     def export_workspace(self, sid: str, *, max_bytes: int) -> bytes:
         """tar of /workspace (taken inside the sandbox; the host never extracts it)."""
         import base64
-        r = self._sh(sid, 'tar -c -C /workspace . | base64 -w0; exit "${PIPESTATUS:-0}"', timeout_s=600,
+        r = self._sh(sid, '{ tar -c -C /workspace . || echo "CSB_TAR_FAILED" >&2; } | base64 -w0', timeout_s=600,
                      max_output_bytes=max_bytes * 4 // 3 + 1024)
-        if r.exit_code != 0 or r.truncated:
+        if r.exit_code != 0 or r.truncated or "CSB_TAR_FAILED" in r.stderr:
             raise RuntimeError_("snapshot failed: " + ("workspace larger than the snapshot limit" if r.truncated
                                                         else r.stderr.strip()[:200]))
         return base64.b64decode(r.stdout)

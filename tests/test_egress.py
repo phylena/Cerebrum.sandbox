@@ -136,3 +136,15 @@ def test_upstream_chaining(tmp_path, echo):
         assert b"403" in connect(p, "evil.com:443")                    # still enforced before upstream
     finally:
         p.stop(); up.close()
+
+
+def test_plain_http_host_header_is_forced_to_the_vetted_target(proxy, echo):
+    port, seen = echo
+    proxy.set_policy("127.0.0.1", "sb1", ["allowed.test"], [port])
+    s = socket.create_connection(("127.0.0.1", proxy.port), 5)
+    s.sendall(f"GET http://allowed.test:{port}/ HTTP/1.1\r\nHost: evil.example\r\n\r\n".encode())
+    while s.recv(4096):
+        pass
+    s.close()
+    req = seen[-1].decode()
+    assert f"Host: allowed.test:{port}" in req and "evil.example" not in req

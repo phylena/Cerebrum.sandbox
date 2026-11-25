@@ -189,9 +189,12 @@ class EgressProxy:
                 return
             host, port = u.hostname, u.port or 80
             path = (u.path or "/") + (f"?{u.query}" if u.query else "")
+            # drop hop-by-hop/proxy headers and any client Host header: the vetted target IS the Host
+            # (prevents fronting another site behind an allowlisted shared host)
             headers = [h for h in rest.split(b"\r\n") if h and not h.lower().startswith(
-                (b"proxy-", b"connection:", b"keep-alive:"))]
-            forward = (f"{method} {path} HTTP/1.1\r\n".encode() + b"\r\n".join(headers) +
+                (b"proxy-", b"connection:", b"keep-alive:", b"host:"))]
+            host_hdr = host if port == 80 else f"{host}:{port}"
+            forward = (f"{method} {path} HTTP/1.1\r\nHost: {host_hdr}\r\n".encode() + b"\r\n".join(headers) +
                        b"\r\nConnection: close\r\n\r\n")
         pol, why, addrs = self._decide(src, host, port)
         if why:

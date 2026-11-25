@@ -194,3 +194,29 @@ def test_prometheus_metrics(tmp_path):
     assert 'csb_runtime_up{runtime="docker"} 1' in t and "# TYPE csb_jobs gauge" in t
     m = c.get(f"/api/v1/sandboxes/{sid}/metrics", headers=VW).json()
     assert m["limits"]["memory_mb"] == 256 and m["executions"] == {"ok": 1}
+
+
+def test_events_are_scoped_for_tenant_keys(tmp_path):
+    c, rt, _ = mk(tmp_path)
+    k = c.post("/api/v1/keys", json={"name": "ten", "owner": "ten"}, headers=ADM).json()["key"]
+    h = {"Authorization": f"Bearer {k}"}
+    mine = c.post("/api/v1/sandboxes", json={"profile": "basic"}, headers=h).json()["id"]
+    other = c.post("/api/v1/sandboxes", json={"profile": "basic"}, headers=OP).json()["id"]
+    ev = c.app.state.controller.events
+    ev.emit("sandbox_lost", "critical", mine, "mine"); ev.emit("sandbox_lost", "critical", other, "theirs")
+    ev.emit("resource_exhaustion", "critical", "memory", "host")
+    assert [e["target"] for e in c.get("/api/v1/events", headers=h).json()] == [mine]
+    assert len(c.get("/api/v1/events", headers=VW).json()) == 3
+
+
+def test_cleanup_continues_when_one_destroy_fails(tmp_path):
+    c, rt, _ = mk(tmp_path)
+    ctl, store = c.app.state.controller, c.app.state.store
+    a = c.post("/api/v1/sandboxes", json={"profile": "basic"}, headers=OP).json()["id"]
+    b = c.post("/api/v1/sandboxes", json={"profile": "basic"}, headers=OP).json()["id"]
+    store.x("UPDATE sandboxes SET expires_at=1")
+    from cerebrum_sandbox.runtime import RuntimeError_
+    orig = rt.destroy
+    rt.destroy = lambda sid, **kw: (_ for _ in ()).throw(RuntimeError_("worker down")) if sid == a else orig(sid, **kw)
+    assert ctl.cleanup_expired() == [b]
+    assert any(e["kind"] == "cleanup_failed" and e["target"] == a for e in ctl.events.list_events())

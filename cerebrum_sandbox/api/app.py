@@ -433,8 +433,12 @@ def create_app(st: Settings | None = None, runtime: Runtime | None = None, *,
 
     # ---- monitoring ----------------------------------------------------------------------
     @app.get("/api/v1/events")
-    def events(limit: int = Query(100, ge=1, le=1000), severity: str | None = None, _p: Principal = viewer):
-        return ctl.events.list_events(limit, severity)
+    def events(limit: int = Query(100, ge=1, le=1000), severity: str | None = None, p: Principal = viewer):
+        if p.owner is None:
+            return ctl.events.list_events(limit, severity)
+        mine = {s["id"] for s in ctl.list_sandboxes() if s["owner"] == p.owner} | \
+               {r["id"] for r in store.q("SELECT id FROM jobs WHERE owner=?", (p.owner,))}
+        return [e for e in ctl.events.list_events(1000, severity) if e["target"] in mine][:limit]
 
     @app.post("/api/v1/maintenance/run")
     def run_maintenance(_p: Principal = admin):

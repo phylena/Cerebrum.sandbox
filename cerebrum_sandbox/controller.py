@@ -662,7 +662,11 @@ class Controller:
         gone = []
         for s in self.list_sandboxes():
             if s["expires_at"] and s["expires_at"] < time.time() and s["state"] not in ("terminated",):
-                self.destroy(s["id"], actor)
-                gone.append(s["id"])
+                try:
+                    self.destroy(s["id"], actor)
+                    gone.append(s["id"])
+                except ControllerError as e:  # e.g. its worker is down: retry next round, keep going
+                    if self.events:
+                        self.events.emit("cleanup_failed", "warning", s["id"], e.message)
         self.store.purge_audit(self.st.audit_retention_days)
         return gone

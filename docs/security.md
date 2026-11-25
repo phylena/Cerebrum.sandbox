@@ -39,4 +39,5 @@ that must not see each other.
 - `allowed_executables` is a policy aid, not a boundary: an allowed interpreter can run anything inside the sandbox.
 - Background processes may keep running inside a sandbox after an execution (bounded by its limits); call `processes/kill` or stop the sandbox.
 - Remote workers are trusted nodes; use TLS between them. Custom profiles must exist on each worker.
+- Egress allowlisting is by hostname at CONNECT time; TLS is not intercepted, so a client could present a different SNI/Host inside the tunnel to a shared front (domain fronting on CDNs). Plain HTTP has its Host header forced to the vetted target. Allowlist only hosts you trust end-to-end.
 - Env vars passed to `execute` are visible in the host's process list for the duration of the call; pass secrets only through the broker.

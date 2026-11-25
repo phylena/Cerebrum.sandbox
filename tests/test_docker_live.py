@@ -521,3 +521,13 @@ def test_browser_profile_headless_chromium_live(tmp_path):
         assert c.get(f"/api/v1/sandboxes/{sid}/files/download?path=shot.png", headers=H).content[:4] == b"\x89PNG"
     finally:
         c.delete(f"/api/v1/sandboxes/{sid}", headers=H)
+
+
+def test_snapshot_detects_unreadable_files(box):
+    rt, make = box
+    sid, run = make()
+    run("bash", "-c", "echo x > a; echo y > secret; chmod 000 secret")   # tar cannot read it
+    with pytest.raises(RuntimeError_, match="snapshot failed"):
+        rt.export_workspace(sid, max_bytes=10**6)
+    run("chmod", "600", "secret")
+    assert len(rt.export_workspace(sid, max_bytes=10**6)) > 0
