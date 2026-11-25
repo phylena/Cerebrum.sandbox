@@ -16,8 +16,8 @@ jobs:
           curl -fsSLO $B/gvisor.tar.bz2 && curl -fsSLO $B/gvisor.tar.bz2.sha512 && sha512sum -c gvisor.tar.bz2.sha512
           tar -xjf gvisor.tar.bz2 runsc && sudo install -m 0755 runsc /usr/local/bin/runsc
           sudo /usr/local/bin/runsc install && sudo systemctl restart docker
-      - name: Build the sandbox base image (enables the live isolation tests)
-        run: docker build -t cerebrum-sandbox/base:latest -f images/base.Dockerfile images
+      - name: Build the sandbox images (enables the live isolation and profile tests)
+        run: images/build.sh base research mcp browser
       - name: Unit + live Docker tests
         run: python -m pytest -q
       - name: Validate the AWS template

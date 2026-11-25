@@ -8,14 +8,15 @@ asks, inside sandboxes, and reports back.
 execution with timeouts, files and workspaces with quotas, git (host-side hardened clone, in-sandbox
 branch/commit/diff, patch report, never pushes), credential broker with leases, an allowlist egress proxy
 enforced at the network layer, jobs with a priority queue and retries, workspace snapshots, monitoring/events/metrics,
-scoped tenant keys, a dashboard, and an API of 59 operations.
+scoped tenant keys, a dashboard, an API of 59 operations, and profile images for research (scientific Python),
+MCP servers (MCP SDK) and browser automation (headless Chromium), each tested inside a network-less sandbox.
 gVisor (`runsc` release 20261123) is also verified live: same controls, plus syscalls go to gVisor's user-space kernel.
 **Implemented but not verified on real hardware here:** Firecracker microVMs (no KVM) and GPU passthrough (no GPU). See [docs/architecture.md](docs/architecture.md) for the exact status of every part.
 
 ## Quick start (single server)
 ```bash
 pip install -e '.[test]'
-docker build -t cerebrum-sandbox/base:latest -f images/base.Dockerfile images
+images/build.sh                       # base, research, mcp, browser images (training: images/build.sh training)
 export SANDBOX_ADMIN_KEY=$(openssl rand -hex 32) SANDBOX_OPERATOR_KEY=$(openssl rand -hex 32)
 python -m cerebrum_sandbox            # API + dashboard on http://127.0.0.1:8300 (/docs, /dashboard)
 python -m pytest                      # 140+ tests; live Docker tests run when the daemon + image exist

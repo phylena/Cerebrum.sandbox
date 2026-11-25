@@ -436,3 +436,88 @@ def test_gvisor_via_api_isolation_request(tmp_path):
         assert r2["runtime"] == "gvisor" and r2["profile_snapshot"]["isolation"] == "gvisor"
     finally:
         c2.delete(f"/api/v1/sandboxes/{r2['id']}", headers=H)
+
+
+# ---------------- profile images (run when the images exist) ----------------
+def _img(name):
+    return _have() and subprocess.run(["docker", "image", "inspect", f"cerebrum-sandbox/{name}:latest"],
+                                      capture_output=True).returncode == 0
+
+
+def _api(tmp_path):
+    st = Settings(data_dir=tmp_path, operator_key="op", viewer_key="vw", admin_key="adm")
+    return TestClient(create_app(st)), {"Authorization": "Bearer op"}
+
+
+@pytest.mark.skipif(not _img("research"), reason="research image not built")
+def test_research_profile_live(tmp_path):
+    c, H = _api(tmp_path)
+    sid = c.post("/api/v1/sandboxes", json={"profile": "research"}, headers=H).json()["id"]
+    try:
+        code = ("import numpy as np, pandas as pd\nfrom sklearn.linear_model import LinearRegression\n"
+                "x=np.arange(10).reshape(-1,1); y=3*x.ravel()+2\nm=LinearRegression().fit(x,y)\n"
+                "import matplotlib.pyplot as plt; plt.plot(x,y); plt.savefig('plot.png')\n"
+                "print(round(m.coef_[0],3), round(m.intercept_,3), pd.Series(y).sum())")
+        r = c.post(f"/api/v1/sandboxes/{sid}/execute", json={"argv": ["python3", "-c", code], "timeout_s": 120},
+                   headers=H).json()
+        assert r["stdout"].split() == ["3.0", "2.0", "155"], r
+        png = c.get(f"/api/v1/sandboxes/{sid}/files/download?path=plot.png", headers=H).content
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    finally:
+        c.delete(f"/api/v1/sandboxes/{sid}", headers=H)
+
+
+@pytest.mark.skipif(not _img("mcp"), reason="mcp image not built")
+def test_mcp_profile_runs_an_isolated_mcp_server_live(tmp_path):
+    c, H = _api(tmp_path)
+    sid = c.post("/api/v1/sandboxes", json={"profile": "mcp"}, headers=H).json()["id"]
+    server = (b"from mcp.server.mcpserver import MCPServer\nmcp = MCPServer('calc')\n"
+              b"@mcp.tool()\ndef add(a: int, b: int) -> int:\n    return a + b\n"
+              b"if __name__ == '__main__':\n    mcp.run()\n")
+    client = (b"import asyncio\nfrom mcp import ClientSession, StdioServerParameters\n"
+              b"from mcp.client.stdio import stdio_client\n"
+              b"async def main():\n"
+              b"    p = StdioServerParameters(command='python3', args=['server.py'])\n"
+              b"    async with stdio_client(p) as (r, w):\n"
+              b"        async with ClientSession(r, w) as s:\n"
+              b"            await s.initialize()\n"
+              b"            tools = [t.name for t in (await s.list_tools()).tools]\n"
+              b"            res = await s.call_tool('add', {'a': 2, 'b': 40})\n"
+              b"            print(tools, res.content[0].text)\n"
+              b"asyncio.run(main())\n")
+    try:
+        c.post(f"/api/v1/sandboxes/{sid}/files/upload?path=server.py", content=server, headers=H)
+        c.post(f"/api/v1/sandboxes/{sid}/files/upload?path=client.py", content=client, headers=H)
+        r = c.post(f"/api/v1/sandboxes/{sid}/execute", json={"argv": ["python3", "client.py"], "timeout_s": 60},
+                   headers=H).json()
+        assert r["stdout"].strip() == "['add'] 42", r
+    finally:
+        c.delete(f"/api/v1/sandboxes/{sid}", headers=H)
+
+
+@pytest.mark.skipif(not _img("browser"), reason="browser image not built")
+def test_browser_profile_headless_chromium_live(tmp_path):
+    c, H = _api(tmp_path)
+    r = c.post("/api/v1/sandboxes", json={"profile": "browser"}, headers=H)
+    assert r.status_code == 201, r.text
+    sid = r.json()["id"]
+    script = (b"from playwright.sync_api import sync_playwright\n"
+              b"with sync_playwright() as p:\n"
+              b"    b = p.chromium.launch()\n"
+              b"    pg = b.new_page()\n"
+              b"    pg.set_content('<h1 id=t>Cerebrum</h1><script>document.getElementById(\"t\").textContent+=\" ok\"</script>')\n"
+              b"    print(pg.inner_text('#t'))\n"
+              b"    pg.screenshot(path='shot.png')\n"
+              b"    try:\n"
+              b"        pg.goto('https://example.com', timeout=5000); print('NETWORK OPEN')\n"
+              b"    except Exception as e:\n"
+              b"        print('offline')\n"
+              b"    b.close()\n")
+    try:
+        c.post(f"/api/v1/sandboxes/{sid}/files/upload?path=b.py", content=script, headers=H)
+        r = c.post(f"/api/v1/sandboxes/{sid}/execute", json={"argv": ["python3", "b.py"], "timeout_s": 120},
+                   headers=H).json()
+        assert r["stdout"].split("\n")[:2] == ["Cerebrum ok", "offline"], r
+        assert c.get(f"/api/v1/sandboxes/{sid}/files/download?path=shot.png", headers=H).content[:4] == b"\x89PNG"
+    finally:
+        c.delete(f"/api/v1/sandboxes/{sid}", headers=H)

@@ -62,6 +62,7 @@ Because AI-generated code is untrusted, the recommended production default on AW
 | `jobs.py` | priority queue, retries, cancel, budget, recovery | unit + live |
 | `monitor.py` | events, alert webhook, maintenance loop, Prometheus metrics, backups | unit |
 | `resources.py` | CPU/memory/disk/KVM/GPU discovery | unit; GPU path untested (no GPU) |
+| `images/` | base, research (numpy/pandas/sklearn/matplotlib), mcp (MCP SDK 2.3), browser (Playwright + Chromium), training (CUDA PyTorch) | base/research/mcp/browser built and **live**-tested; training not built |
 | Deployment | controller image, compose, systemd, CloudFormation, CI | image run live; template `cfn-lint` clean, never deployed |
 
 Not implemented: memory-state snapshots, Firecracker jailer/networking/snapshots, an OpenSandbox adapter,
@@ -83,4 +84,4 @@ Phases 1-18 of the brief are implemented to the level stated in section 3. Remai
 1. Run `pytest -m docker` on a KVM host (`.metal`) to verify Firecracker for real; add the Firecracker jailer.
 2. Verify GPU passthrough on a `g5`/`g6` instance with the NVIDIA container toolkit.
 3. Per-owner quotas; automatic rescheduling of jobs from dead workers.
-4. Build and publish the research/training/browser/mcp images that those profiles reference.
+4. Build and verify the `training` image on a GPU worker (`images/training.Dockerfile`; the `base`, `research`, `mcp` and `browser` images are built and verified live).
