@@ -35,7 +35,10 @@ retention purges (audit, executions, netlog, events) and a daily metadata backup
 `SANDBOX_BACKUP_KEEP` kept; the AWS template syncs them to S3).
 
 On restart the controller reconciles stored state with the runtime, re-registers egress policies and re-queues
-interrupted jobs (or fails them when out of retries). Metadata is SQLite in WAL mode (`data/sandbox.db`, mode 0600).
+interrupted jobs (or fails them when out of retries). Verified live: the service (docker + gvisor runtimes, egress
+proxy, 2 job runners, maintenance every 3 s) was killed with `kill -9` while a job ran; after restart the orphaned
+sandbox was destroyed, the job re-ran and succeeded on attempt 2, all other jobs succeeded, no container was left
+behind and the daily metadata backup was written. Metadata is SQLite in WAL mode (`data/sandbox.db`, mode 0600).
 To restore: stop the service, copy a backup over `sandbox.db`, start it; reconciliation fixes state drift.
 
 ## Monitoring
