@@ -43,34 +43,44 @@ Isolation tiers behind one `Runtime` interface:
 3. **microVM (Firecracker via E2B-runtime/Sandstorm patterns, or microsandbox)**: roadmap; needs KVM hosts.
 Because AI-generated code is untrusted, the recommended production default on AWS is tier 2 minimum, tier 3 for anything with network access or secrets.
 
-## 3. Components (implemented now vs planned)
+## 3. Components and verification status
 
-| Module | State |
-|---|---|
-| `settings`, `auth` (admin/operator/viewer, fail closed) | done |
-| `lifecycle` (validated state machine) | done |
-| `profiles` (basic, development, research, training, browser, mcp + admin custom; extra fields forbidden) | done; training/browser/mcp/research images not yet built |
-| `policy` (network model, strict domain validation) | model done; **enforcement only for `none`**. Allowlist needs an internal Docker network + egress proxy (phase 9); until configured the adapter refuses (fail closed) |
-| `runtime/base` + `runtime/docker` | done, hardening unit-tested, live behaviour unverified |
-| `runtime/gvisor`, `runtime/firecracker` (+ guest agent), `runtime/remote`, `runtime/registry`, `scheduler` (placement, exclusive GPU assignment) | done and tested against fakes / real agent code; **not run on real runsc, KVM or GPU hardware**. See [runtimes.md](runtimes.md) |
-| `controller` (create/start/stop/pause/resume/destroy, quotas, execute, recovery, TTL cleanup) | done |
-| `store` (SQLite WAL metadata, audit, online backup) | done |
-| `redact` | done |
-| `resources` (CPU/mem/disk/KVM/GPU detection) | done |
-| `api` (sandboxes, execute, executions, logs, profiles, resources, audit, health) | done |
-| files/workspace API, git, credential broker, job queue/retries, snapshots, metrics, dashboard, Cerebrum tool, AWS IaC, Firecracker jailer/network, OpenSandbox adapter | **not started** (see roadmap) |
+"Live" means exercised against a real Docker daemon (Docker 29, this repo's build host) by `tests/test_docker_live.py`.
 
-## 4. Security model (current)
-- Commands are **argv vectors** only: no shell string is built by the platform.
-- Containers: non-root 10001, read-only rootfs, `--cap-drop ALL`, no-new-privileges, pids/memory(+no swap)/cpu limits, `--network none` default, tmpfs `/tmp`, no host bind mounts, no Docker socket, image prefix allowlist, working dir confined to `/workspace`.
-- Temporary workspaces are size-limited tmpfs (kernel-enforced); persistent ones are named volumes whose byte quota is **not yet enforced** (phase 6).
-- Known limits: no seccomp profile beyond Docker's default; env vars passed at exec are visible in host process listings (credential broker will replace this); `Profile.allowed_executables` is a policy aid, not a security boundary (a permitted interpreter can run anything); there is no per-owner access isolation between operator-key holders yet (single operator key = Cerebrum).
-- Audit log + redaction on stored output/logs; retention purge on cleanup.
+| Module | What it does | Verified |
+|---|---|---|
+| `api/app.py` | 59 operations, OpenAPI at `/docs`, dashboard at `/dashboard` | unit + live + browser |
+| `auth.py` | role keys + scoped, hashed, expiring, revocable tenant keys | unit |
+| `controller.py`, `lifecycle.py` | lifecycle state machine, quotas, execution, files, git, snapshots, recovery | unit + live |
+| `scheduler.py` | placement on local/remote workers, exclusive GPU assignment | unit |
+| `runtime/docker.py` | hardened containers | **live** |
+| `runtime/gvisor.py` | Docker + `runsc`; refuses without it | unit (no `runsc` here) |
+| `runtime/firecracker.py` + `images/firecracker/` | own Firecracker driver + vsock guest agent | fake Firecracker + real agent; **no KVM here** |
+| `runtime/remote.py` | worker fleet over the same public API | unit (two in-process services) |
+| `egress.py` | allowlist proxy on an internal network | unit + **live** |
+| `git_ops.py`, `broker.py` | hardened host-side clone, in-sandbox git, credential leases, GitHub App tokens | unit + live (+ real public clone) |
+| `jobs.py` | priority queue, retries, cancel, budget, recovery | unit + live |
+| `monitor.py` | events, alert webhook, maintenance loop, Prometheus metrics, backups | unit |
+| `resources.py` | CPU/memory/disk/KVM/GPU discovery | unit; GPU path untested (no GPU) |
+| Deployment | controller image, compose, systemd, CloudFormation, CI | image run live; template `cfn-lint` clean, never deployed |
 
-## 5. AWS deployment design (not created)
-Start: **one EC2 instance** (e.g. m7i/c7i for CPU; `g5/g6` for GPU; a `.metal` type only if microVMs are enabled), encrypted gp3 EBS for `SANDBOX_DATA_DIR`, API bound to localhost behind Caddy/ALB with TLS, security group with no inbound except the proxy, IAM instance role with **no** permissions beyond CloudWatch/SSM, IMDSv2 required and **blocked from sandboxes** (iptables rule on the docker bridge to 169.254.169.254; the default `--network none` already prevents it). S3 for snapshot/backups later. Scale-out: workers on additional instances registered with the controller, or EKS + agent-sandbox. Nothing is provisioned by this repo; IaC will be CDK/CloudFormation, delivered for review and never applied without approval.
+Not implemented: memory-state snapshots, Firecracker jailer/networking/snapshots, an OpenSandbox adapter,
+automatic rescheduling from dead workers, multi-tenant quotas per owner (limits are per node).
 
-## 6. Roadmap (phases from the brief)
-Done in this change: **1** (repo + architecture), **2** (API+controller), **3** (Docker runtime), **4** (lifecycle), **5** (execution engine, core), parts of **8** (hardening), **10** (audit/redaction), **16** (tests).
-Added since: **12** (placement across local + remote workers; queue/retries still open), **13** (GPU workers), **14** (gVisor, Firecracker, remote-worker adapters; OpenSandbox not done).
-Next, in order: 6 workspaces+files API (quota enforcement) -> 7 git (clone/branch/diff/commit in sandbox; credential broker with short-lived tokens, creds never in sandbox) -> 9 allowlist egress proxy + netlog -> 11 Cerebrum integration (a `sandbox` tool in `brain/app/tools.py`, minimal PR to Cerebrum.model, uses the operator key) -> 12 scheduler/queue/jobs/workers -> 13 GPU workers -> 14 gVisor verification, OpenSandbox/Firecracker adapters -> 15 dashboard -> 17 AWS IaC -> 18 docs.
+## 4. Security model
+See [security.md](security.md): every control, how it is tested, and the known limits.
+
+## 5. AWS deployment
+Implemented as `deploy/aws/cerebrum-sandbox.yaml` (CloudFormation, `cfn-lint` clean, **never deployed**): one EC2
+instance (`m7i/c7i` CPU, `g5/g6` GPU, `.metal` for Firecracker), no inbound ports (SSM port forwarding), IMDSv2 with
+hop limit 1 and a `DOCKER-USER` drop for 169.254.169.254, SSM/CloudWatch-only instance role, encrypted gp3 data
+volume with snapshot-on-delete, optional private versioned backup bucket with TLS-only policy. Scale-out = more
+instances registered as workers. No billing, budget or network configuration outside the stack is touched.
+See [operations.md](operations.md).
+
+## 6. Roadmap
+Phases 1-18 of the brief are implemented to the level stated in section 3. Remaining work, in order of value:
+1. Run `pytest -m docker` with `runsc` installed and on a KVM host (`.metal`) to verify gVisor and Firecracker for real; add the Firecracker jailer.
+2. Verify GPU passthrough on a `g5`/`g6` instance with the NVIDIA container toolkit.
+3. Per-owner quotas; automatic rescheduling of jobs from dead workers.
+4. Build and publish the research/training/browser/mcp images that those profiles reference.
