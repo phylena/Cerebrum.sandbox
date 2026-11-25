@@ -1,0 +1,215 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Cerebrum.sandbox single-server deployment (controller + sandboxes on one EC2 instance).
+  No inbound ports: reach the API through an SSM port-forwarding session. IMDS is not reachable
+  from containers. Creating this stack costs money; it is never created automatically.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: m7i.xlarge
+    AllowedValues: [m7i.large, m7i.xlarge, m7i.2xlarge, m7i.4xlarge, c7i.2xlarge, c7i.4xlarge,
+                    g5.xlarge, g5.2xlarge, g6.xlarge, g6.2xlarge, m7i.metal-24xl, c7i.metal-24xl]
+    Description: g5/g6 = GPU workers (use a GPU AMI). *.metal = needed for the Firecracker runtime (KVM).
+  ImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: >-
+      For GPU instances use an NVIDIA-driver AMI, e.g.
+      /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: A subnet with outbound internet access (NAT or public IP) for registries and git.
+  DataVolumeGiB:
+    Type: Number
+    Default: 200
+    MinValue: 20
+    MaxValue: 16000
+  ReleaseS3Uri:
+    Type: String
+    Default: ""
+    Description: Optional s3://bucket/key of a Cerebrum.sandbox release tarball to install at boot.
+  EnableBackups:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+
+Conditions:
+  HasRelease: !Not [!Equals [!Ref ReleaseS3Uri, ""]]
+  Backups: !Equals [!Ref EnableBackups, "true"]
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Cerebrum.sandbox - no inbound; outbound HTTPS/HTTP only
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: "registries, git and SSM"}
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: OS package mirrors}
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    Condition: Backups
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration:
+        Rules:
+          - {Id: expire-old-backups, Status: Enabled, ExpirationInDays: 30, NoncurrentVersionExpiration: {NoncurrentDays: 7}}
+
+  BackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: Backups
+    Properties:
+      Bucket: !Ref BackupBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt BackupBucket.Arn, !Sub "${BackupBucket.Arn}/*"]
+            Condition: {Bool: {"aws:SecureTransport": "false"}}
+
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - !If
+          - Backups
+          - PolicyName: backups
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: [s3:PutObject, s3:GetObject]
+                  Resource: !Sub "${BackupBucket.Arn}/backups/*"
+                - Effect: Allow
+                  Action: s3:ListBucket
+                  Resource: !GetAtt BackupBucket.Arn
+                  Condition: {StringLike: {"s3:prefix": ["backups/*"]}}
+          - !Ref AWS::NoValue
+        - !If
+          - HasRelease
+          - PolicyName: release
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: s3:GetObject
+                  Resource: !Sub
+                    - "arn:${AWS::Partition}:s3:::${Path}"
+                    - Path: !Select [1, !Split ["s3://", !Ref ReleaseS3Uri]]
+          - !Ref AWS::NoValue
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref Role]
+
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt Instance.AvailabilityZone
+      Size: !Ref DataVolumeGiB
+      VolumeType: gp3
+      Encrypted: true
+      Tags: [{Key: Name, Value: cerebrum-sandbox-data}]
+
+  DataVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref Instance
+      VolumeId: !Ref DataVolume
+      Device: /dev/sdf
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds: [!Ref SecurityGroup]
+      IamInstanceProfile: !Ref InstanceProfile
+      MetadataOptions:
+        HttpTokens: required          # IMDSv2 only
+        HttpPutResponseHopLimit: 1    # tokens cannot be fetched from inside containers
+        HttpEndpoint: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+      Tags: [{Key: Name, Value: cerebrum-sandbox}]
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            dnf install -y docker git python3.11 python3.11-pip iptables-nft
+            systemctl enable --now docker
+            # Containers must never reach the instance metadata service.
+            mkdir -p /etc/systemd/system/docker.service.d
+            printf '[Service]\nExecStartPost=/usr/sbin/iptables -I DOCKER-USER -d 169.254.169.254 -j DROP\n' \
+              > /etc/systemd/system/docker.service.d/imds.conf
+            systemctl daemon-reload && systemctl restart docker
+            # Data volume (wait for the attachment), formatted once, mounted with nofail.
+            for i in $(seq 1 60); do [ -e /dev/sdf ] && break; sleep 5; done
+            blkid /dev/sdf || mkfs.ext4 -L csbdata /dev/sdf
+            mkdir -p /var/lib/cerebrum-sandbox
+            grep -q csbdata /etc/fstab || echo 'LABEL=csbdata /var/lib/cerebrum-sandbox ext4 defaults,nofail 0 2' >> /etc/fstab
+            mount -a
+            useradd --system --home /var/lib/cerebrum-sandbox --groups docker cerebrum-sandbox || true
+            chown cerebrum-sandbox: /var/lib/cerebrum-sandbox
+            python3.11 -m venv /opt/cerebrum-sandbox
+            if [ -n "${Release}" ]; then
+              aws s3 cp "${Release}" /tmp/csb.tgz && mkdir -p /opt/csb-src && tar -xzf /tmp/csb.tgz -C /opt/csb-src
+              /opt/cerebrum-sandbox/bin/pip install /opt/csb-src
+              install -m 0644 /opt/csb-src/deploy/systemd/cerebrum-sandbox.service /etc/systemd/system/
+              docker build -t cerebrum-sandbox/base:latest -f /opt/csb-src/images/base.Dockerfile /opt/csb-src/images
+            fi
+            mkdir -p /etc/cerebrum-sandbox && touch /etc/cerebrum-sandbox/env && chmod 600 /etc/cerebrum-sandbox/env
+            # Keys are NOT generated here: set them over SSM into /etc/cerebrum-sandbox/env, then
+            #   systemctl enable --now cerebrum-sandbox
+            if [ -n "${Bucket}" ]; then
+              echo "17 3 * * * root aws s3 sync /var/lib/cerebrum-sandbox/backups s3://${Bucket}/backups/ --only-show-errors" \
+                > /etc/cron.d/cerebrum-sandbox-backup
+            fi
+          - Release: !Ref ReleaseS3Uri
+            Bucket: !If [Backups, !Ref BackupBucket, ""]
+
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+  ApiTunnel:
+    Description: Open the API/dashboard on your machine at http://localhost:8300/dashboard
+    Value: !Sub >-
+      aws ssm start-session --target ${Instance} --document-name AWS-StartPortForwardingSession
+      --parameters portNumber=8300,localPortNumber=8300
+  BackupBucket:
+    Condition: Backups
+    Value: !Ref BackupBucket

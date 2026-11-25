@@ -1,0 +1,23 @@
+# Single-server deployment. Build the sandbox base image first:
+#   docker build -t cerebrum-sandbox/base:latest -f images/base.Dockerfile images
+#   cp .env.example .env   # set the keys
+#   docker compose up -d --build
+# network_mode: host is required so the egress proxy can listen on the internal network's
+# gateway address and the API stays on 127.0.0.1 (put TLS/Caddy or an SSM tunnel in front).
+name: cerebrum-sandbox
+services:
+  controller:
+    build: .
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    environment:
+      SANDBOX_DATA_DIR: /data
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # controller only; never mounted into sandboxes
+      - sandbox-data:/data
+    # Firecracker runtime (KVM hosts only): uncomment and set SANDBOX_RUNTIMES=docker,firecracker
+    # devices: ["/dev/kvm:/dev/kvm"]
+    # volumes: ["/var/lib/cerebrum-sandbox/fc:/var/lib/cerebrum-sandbox/fc", "/opt/fc:/opt/fc:ro"]
+volumes:
+  sandbox-data:
