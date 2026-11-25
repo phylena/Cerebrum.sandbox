@@ -6,8 +6,7 @@ filesystem, all capabilities dropped, no-new-privileges, pids/memory/cpu limits,
 tmpfs /tmp, no host mounts, `--network none` unless an allowlist profile and an egress
 network are both configured. gVisor (`runsc`) is used when the profile asks for it.
 
-STATUS: command construction is unit-tested. Behaviour against a live daemon is covered by
-tests marked `docker` and has NOT been verified in the build environment (no daemon).
+STATUS: verified live against Docker 29 by tests/test_docker_live.py (GPU flags: unit-tested only).
 """
 import re
 import subprocess

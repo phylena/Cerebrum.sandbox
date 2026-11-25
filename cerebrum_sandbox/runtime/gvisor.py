@@ -3,8 +3,7 @@ so sandbox syscalls never reach the host kernel directly. It subclasses the Dock
 so every hardening flag still applies; the only difference is `--runtime runsc`.
 
 Refuses to create anything unless the daemon really has the runtime registered (it will not
-fall back to runc). STATUS: runtime detection is unit-tested; running real workloads under
-runsc is unverified in the build environment (no Docker daemon, no runsc).
+fall back to runc). STATUS: verified live with runsc release 20261123 (tests/test_docker_live.py).
 """
 import json
 

@@ -54,7 +54,7 @@ Because AI-generated code is untrusted, the recommended production default on AW
 | `controller.py`, `lifecycle.py` | lifecycle state machine, quotas, execution, files, git, snapshots, recovery | unit + live |
 | `scheduler.py` | placement on local/remote workers, exclusive GPU assignment | unit |
 | `runtime/docker.py` | hardened containers | **live** |
-| `runtime/gvisor.py` | Docker + `runsc`; refuses without it | unit (no `runsc` here) |
+| `runtime/gvisor.py` | Docker + `runsc`; refuses without it | **live** (runsc 20261123) |
 | `runtime/firecracker.py` + `images/firecracker/` | own Firecracker driver + vsock guest agent | fake Firecracker + real agent; **no KVM here** |
 | `runtime/remote.py` | worker fleet over the same public API | unit (two in-process services) |
 | `egress.py` | allowlist proxy on an internal network | unit + **live** |
@@ -80,7 +80,7 @@ See [operations.md](operations.md).
 
 ## 6. Roadmap
 Phases 1-18 of the brief are implemented to the level stated in section 3. Remaining work, in order of value:
-1. Run `pytest -m docker` with `runsc` installed and on a KVM host (`.metal`) to verify gVisor and Firecracker for real; add the Firecracker jailer.
+1. Run `pytest -m docker` on a KVM host (`.metal`) to verify Firecracker for real; add the Firecracker jailer.
 2. Verify GPU passthrough on a `g5`/`g6` instance with the NVIDIA container toolkit.
 3. Per-owner quotas; automatic rescheduling of jobs from dead workers.
 4. Build and publish the research/training/browser/mcp images that those profiles reference.

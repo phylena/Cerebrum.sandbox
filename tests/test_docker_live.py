@@ -356,3 +356,83 @@ def test_snapshot_restore_into_new_sandbox_real_docker(tmp_path):
     finally:
         c.delete(f"/api/v1/sandboxes/{a}", headers=H)
         c.delete(f"/api/v1/sandboxes/{b}", headers=H)
+
+
+# ---------------- gVisor (runs only when the daemon has `runsc` registered) ----------------
+def _have_runsc():
+    if not _have():
+        return False
+    out = subprocess.run(["docker", "info", "--format", "{{json .Runtimes}}"], capture_output=True, text=True).stdout
+    return '"runsc"' in out
+
+
+gvisor = pytest.mark.skipif(not _have_runsc(), reason="runsc not registered with Docker")
+
+
+@pytest.fixture
+def gbox():
+    rt = GVisorRuntime(Settings())
+    made = []
+
+    def make(**upd):
+        sid = uuid.uuid4().hex[:12]
+        rt.create(SandboxSpec(sid, BUILTIN["basic"].model_copy(update={"isolation": "gvisor", **upd})))
+        rt.start(sid); made.append(sid)
+        return sid, lambda *a, t=20, max_out=20000: rt.execute(sid, list(a), workdir="/workspace", env={},
+                                                               timeout_s=t, max_output_bytes=max_out)
+    yield rt, make
+    for sid in made:
+        rt.destroy(sid, delete_workspace=True)
+
+
+@gvisor
+def test_gvisor_user_space_kernel_and_hardening(gbox):
+    rt, make = gbox
+    sid, run = make()
+    assert "gvisor" in run("uname", "-r").stdout                       # syscalls hit gVisor, not the host kernel
+    assert rt.health()["ok"] is True
+    assert run("id", "-u").stdout.strip() == "10001"
+    st = dict(l.split(":\t") for l in run("bash", "-c", "grep -E '^(CapEff|NoNewPrivs):' /proc/self/status")
+              .stdout.strip().splitlines())
+    assert int(st["CapEff"].strip(), 16) == 0 and st["NoNewPrivs"].strip() == "1"
+    assert run("touch", "/etc/x").exit_code != 0
+    ifaces = [l.split(":")[0].strip() for l in run("cat", "/proc/net/dev").stdout.splitlines()[2:]]
+    assert ifaces in ([], ["lo"])                                           # no network interface but loopback
+    r = run("python3", "-c", "import socket;socket.create_connection(('1.1.1.1',443),3)")
+    assert r.exit_code != 0
+    assert run("sleep", "30", t=2).timed_out
+    rt.write_file(sid, "x/y.bin", bytes(range(256)))
+    assert rt.read_file(sid, "x/y.bin", max_bytes=1000) == bytes(range(256))
+
+
+@gvisor
+def test_gvisor_limits(gbox):
+    _, make = gbox
+    _, run = make(workspace_mb=16, memory_mb=128)
+    assert "No space left" in run("bash", "-c", "dd if=/dev/zero of=/workspace/big bs=1M count=64 2>&1").stdout
+    r = run("python3", "-c", "b=[]\nwhile True: b.append(bytearray(10*2**20))", t=30)
+    assert r.exit_code != 0
+
+
+@gvisor
+def test_gvisor_via_api_isolation_request(tmp_path):
+    from cerebrum_sandbox.runtime.docker import DockerRuntime as D
+    st = Settings(data_dir=tmp_path, operator_key="op", viewer_key="vw", admin_key="adm", min_isolation="container")
+    c = TestClient(create_app(st, runtimes={"docker": D(st), "gvisor": GVisorRuntime(st)}))
+    H = {"Authorization": "Bearer op"}
+    r = c.post("/api/v1/sandboxes", json={"profile": "basic", "isolation": "gvisor"}, headers=H).json()
+    try:
+        assert r["runtime"] == "gvisor"
+        out = c.post(f"/api/v1/sandboxes/{r['id']}/execute", json={"argv": ["uname", "-r"]}, headers=H).json()
+        assert "gvisor" in out["stdout"]
+        assert c.post(f"/api/v1/sandboxes/{r['id']}/pause", headers=H).json()["state"] == "paused"
+        assert c.post(f"/api/v1/sandboxes/{r['id']}/resume", headers=H).json()["state"] == "running"
+    finally:
+        c.delete(f"/api/v1/sandboxes/{r['id']}", headers=H)
+    st2 = Settings(data_dir=tmp_path / "b", operator_key="op", min_isolation="gvisor")
+    c2 = TestClient(create_app(st2, runtimes={"docker": D(st2), "gvisor": GVisorRuntime(st2)}))
+    r2 = c2.post("/api/v1/sandboxes", json={"profile": "basic"}, headers=H).json()   # floor upgrades it
+    try:
+        assert r2["runtime"] == "gvisor" and r2["profile_snapshot"]["isolation"] == "gvisor"
+    finally:
+        c2.delete(f"/api/v1/sandboxes/{r2['id']}", headers=H)

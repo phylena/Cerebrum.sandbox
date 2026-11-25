@@ -14,8 +14,8 @@ GET  /api/v1/runtimes   GET/POST/DELETE /api/v1/workers   GET /api/v1/resources
 ## Isolation levels
 | `isolation` | Runtime | Boundary | Network | GPU | Status |
 |---|---|---|---|---|---|
-| `container` | `docker` | shared kernel + hardening flags | none or proxy allowlist | yes | hardening unit-tested; **no live daemon test run** |
-| `gvisor` | `gvisor` | `runsc` user-space kernel (same Docker flags) | none or proxy allowlist | **refused** | runsc detection unit-tested; **never run against real runsc** |
+| `container` | `docker` | shared kernel + hardening flags | none or proxy allowlist | yes | **verified live** (Docker 29); GPU flag unit-tested only |
+| `gvisor` | `gvisor` | `runsc` user-space kernel (same Docker flags) | none or proxy allowlist | **refused** | **verified live** with runsc release 20261123 (`tests/test_docker_live.py`) |
 | `microvm` | `firecracker` | KVM microVM, own kernel | **none only** (no NIC attached) | **refused** | API sequence, vsock protocol, lifecycle and guest agent tested against a fake Firecracker + the real agent; **never booted a real VM** (no `/dev/kvm` here) |
 
 Rules enforced in code:

@@ -9,8 +9,8 @@ execution with timeouts, files and workspaces with quotas, git (host-side harden
 branch/commit/diff, patch report, never pushes), credential broker with leases, an allowlist egress proxy
 enforced at the network layer, jobs with a priority queue and retries, workspace snapshots, monitoring/events/metrics,
 scoped tenant keys, a dashboard, and an API of 59 operations.
-**Implemented but not verified on real hardware here:** gVisor (`runsc` not installed), Firecracker microVMs (no KVM),
-GPU passthrough (no GPU). See [docs/architecture.md](docs/architecture.md) for the exact status of every part.
+gVisor (`runsc` release 20261123) is also verified live: same controls, plus syscalls go to gVisor's user-space kernel.
+**Implemented but not verified on real hardware here:** Firecracker microVMs (no KVM) and GPU passthrough (no GPU). See [docs/architecture.md](docs/architecture.md) for the exact status of every part.
 
 ## Quick start (single server)
 ```bash

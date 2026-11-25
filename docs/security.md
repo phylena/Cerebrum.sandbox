@@ -21,7 +21,8 @@ that must not see each other.
 | Allowlist networking: internal Docker network (no route, no DNS) + our proxy: exact hosts/ports, no private/metadata IPs, every attempt logged | egress proxy | live + unit |
 | IMDS unreachable from containers on AWS (hop limit 1 + `DOCKER-USER` drop) | CloudFormation | template only |
 | Isolation can only be strengthened per request; per-node floor; runtimes refuse other levels; no silent fallback | controller, runtimes | unit |
-| gVisor (`runsc`) and Firecracker microVMs (no NIC, block-device workspace quota) | runtimes | unit / fakes only |
+| gVisor (`runsc`): user-space kernel; identity, caps, read-only root, no network, quotas, memory limit, timeouts, files, pause/resume, isolation floor | gvisor runtime | **live** (runsc 20261123) |
+| Firecracker microVMs (no NIC, block-device workspace quota) | firecracker runtime | fake Firecracker + real agent only |
 | GPUs assigned exclusively by device index, never `all` | scheduler, docker adapter | unit |
 | Fail-closed auth; role keys; admin-issued scoped keys stored as SHA-256, expiring, revocable; other tenants' objects return 404 | auth, API | unit |
 | Credentials encrypted at rest (Fernet); leases bound to one sandbox + scope + short TTL; injected host-side only; never in sandbox, image, workspace, `.git/config`, logs or responses; GitHub App tokens minted per repo, read-only | broker, git | unit + live (clone) |
@@ -32,7 +33,7 @@ that must not see each other.
 | Worker URLs cannot target metadata/link-local addresses; worker keys never returned | workers | unit |
 
 ## Known limits (read before production)
-- **Container isolation shares the host kernel.** For hostile code use `gvisor` or `microvm` and set `SANDBOX_MIN_ISOLATION`. Neither has been run on real `runsc`/KVM in this repository's test environment yet.
+- **Container isolation shares the host kernel.** For hostile code set `SANDBOX_MIN_ISOLATION=gvisor` (verified live) or use `microvm` (not yet run on real KVM).
 - The controller can drive the Docker daemon, so it is root-equivalent on its host. Keep it on a dedicated machine; never run other workloads under its account.
 - Firecracker: no `jailer` yet (run the service as a dedicated user with `/dev/kvm` access), no networking, no memory snapshots.
 - `allowed_executables` is a policy aid, not a boundary: an allowed interpreter can run anything inside the sandbox.
